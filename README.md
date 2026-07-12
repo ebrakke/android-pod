@@ -2,6 +2,10 @@
 
 A purpose-built Android media appliance, initially targeting the Google Pixel 6 (`oriole`).
 
+<img src="docs/images/classic-now-playing.png"
+     alt="Classic mode showing a restored offline Jellyfin track"
+     width="360">
+
 ## CLI setup
 
 ```sh
@@ -32,6 +36,8 @@ adb shell cmd package set-home-activity --user 0 com.android.launcher3/.uioverri
 - Groups the library by artist and album.
 - Loads embedded album artwork through MediaStore album-art URIs.
 - Creates ordered album queues in a Media3 `MediaSessionService`.
+- Persists and restores complete queues, playback position, shuffle/repeat state, and paused or
+  playing intent across service and process recreation.
 - Supports background playback and system/Bluetooth media controls.
 - Serves as the device's default Home activity.
 - Separates local and remote catalogs behind a source-first home screen.

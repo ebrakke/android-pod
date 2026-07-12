@@ -91,6 +91,8 @@ import dev.reclaimed.player.library.LocalTrack
 import dev.reclaimed.player.library.queryLocalTracks
 import dev.reclaimed.player.library.toLocalArtists
 import dev.reclaimed.player.playback.PlaybackService
+import dev.reclaimed.player.playback.PlaybackItemMetadata
+import dev.reclaimed.player.playback.PlaybackSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -515,8 +517,13 @@ class MainActivity : ComponentActivity() {
 
     private fun play(album: LocalAlbum, startIndex: Int) {
         val mediaItems = album.tracks.map { track ->
+            val extras = Bundle().apply {
+                putString(PlaybackItemMetadata.SOURCE, PlaybackSource.LOCAL.name)
+                putString(PlaybackItemMetadata.SOURCE_ID, track.id.toString())
+                putString(PlaybackItemMetadata.ALBUM_ID, track.albumId.toString())
+            }
             MediaItem.Builder()
-                .setMediaId(track.id.toString())
+                .setMediaId("local:${track.id}")
                 .setUri(track.uri)
                 .setMediaMetadata(
                     MediaMetadata.Builder()
@@ -525,6 +532,8 @@ class MainActivity : ComponentActivity() {
                         .setAlbumTitle(track.album)
                         .setArtworkUri(album.artworkUri)
                         .setTrackNumber(track.trackNumber)
+                        .setDurationMs(track.durationMs)
+                        .setExtras(extras)
                         .build(),
                 )
                 .build()
@@ -541,6 +550,11 @@ class MainActivity : ComponentActivity() {
         val artworkUri = jellyfinDownloadStore.localArtworkUri(album.id)
             ?: Uri.parse(client.imageUrl(album.id))
         val mediaItems = album.tracks.map { track ->
+            val extras = Bundle().apply {
+                putString(PlaybackItemMetadata.SOURCE, PlaybackSource.JELLYFIN.name)
+                putString(PlaybackItemMetadata.SOURCE_ID, track.id)
+                putString(PlaybackItemMetadata.ALBUM_ID, track.albumId)
+            }
             MediaItem.Builder()
                 .setMediaId("jellyfin:${track.id}")
                 .setUri(
@@ -554,6 +568,8 @@ class MainActivity : ComponentActivity() {
                         .setAlbumTitle(track.album)
                         .setArtworkUri(artworkUri)
                         .setTrackNumber(track.trackNumber)
+                        .setDurationMs(track.durationMs)
+                        .setExtras(extras)
                         .build(),
                 )
                 .build()
