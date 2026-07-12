@@ -53,6 +53,7 @@ import dev.reclaimed.player.jellyfin.JellyfinArtist
 import dev.reclaimed.player.jellyfin.JellyfinConfig
 import dev.reclaimed.player.library.LocalAlbum
 import dev.reclaimed.player.library.LocalArtist
+import kotlinx.coroutines.delay
 import kotlin.math.atan2
 
 internal data class CommonShellActions(
@@ -112,7 +113,7 @@ internal fun ClassicPlayerShell(
     onTogglePlayback: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
-    onAdjustVolume: (Int) -> Unit,
+    onAdjustVolume: (Int) -> Float,
     onSwitchToTouch: () -> Unit,
     onOpenTailscale: () -> Unit,
     onOpenWifiSettings: () -> Unit,
@@ -121,6 +122,14 @@ internal fun ClassicPlayerShell(
 ) {
     val screenKey = libraryScreen.classicKey()
     var queueActions by remember { mutableStateOf<ClassicQueueActions?>(null) }
+    var volumeLevel by remember { mutableStateOf<Float?>(null) }
+    var volumeChangeSequence by remember { mutableIntStateOf(0) }
+    LaunchedEffect(volumeChangeSequence) {
+        if (volumeChangeSequence > 0) {
+            delay(VOLUME_INDICATOR_DURATION_MS)
+            volumeLevel = null
+        }
+    }
     BackHandler(enabled = libraryScreen !is LibraryScreen.Home || queueActions != null) {
         if (queueActions != null) queueActions = null else onBack()
     }
@@ -193,7 +202,7 @@ internal fun ClassicPlayerShell(
                     .weight(0.47f),
             ) {
                 if (isNowPlaying) {
-                    ClassicNowPlaying(nowPlaying)
+                    ClassicNowPlaying(nowPlaying, volumeLevel)
                 } else {
                     ClassicMenuDisplay(
                         title = queueActions?.label ?: libraryScreen.classicTitle(jellyfinConfig),
@@ -217,7 +226,8 @@ internal fun ClassicPlayerShell(
                 ClassicWheel(
                     onStep = { direction ->
                         if (isNowPlaying) {
-                            onAdjustVolume(direction)
+                            volumeLevel = onAdjustVolume(direction)
+                            volumeChangeSequence += 1
                         } else if (menuItems.isNotEmpty()) {
                             selectedIndex = Math.floorMod(
                                 selectedIndex + direction,
@@ -326,7 +336,7 @@ private fun ClassicMenuDisplay(
 }
 
 @Composable
-private fun ClassicNowPlaying(nowPlaying: NowPlaying?) {
+private fun ClassicNowPlaying(nowPlaying: NowPlaying?, volumeLevel: Float?) {
     if (nowPlaying == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Nothing playing")
@@ -364,24 +374,44 @@ private fun ClassicNowPlaying(nowPlaying: NowPlaying?) {
             )
         }
         Spacer(Modifier.height(12.dp))
-        LinearProgressIndicator(
-            progress = {
-                if (nowPlaying.durationMs > 0L) {
-                    (nowPlaying.positionMs.toFloat() / nowPlaying.durationMs).coerceIn(0f, 1f)
-                } else {
-                    0f
-                }
-            },
-            modifier = Modifier.fillMaxWidth(0.76f),
-            color = CLASSIC_SELECTION,
-            trackColor = CLASSIC_INK.copy(alpha = 0.15f),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(0.76f),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(formatTrackDuration(nowPlaying.positionMs), style = MaterialTheme.typography.labelSmall)
-            Text(formatTrackDuration(nowPlaying.durationMs), style = MaterialTheme.typography.labelSmall)
+        if (volumeLevel != null) {
+            Text(
+                "Volume",
+                style = MaterialTheme.typography.labelSmall,
+                color = CLASSIC_INK.copy(alpha = 0.65f),
+            )
+            LinearProgressIndicator(
+                progress = { volumeLevel },
+                modifier = Modifier.fillMaxWidth(0.76f),
+                color = CLASSIC_SELECTION,
+                trackColor = CLASSIC_INK.copy(alpha = 0.15f),
+            )
+        } else {
+            LinearProgressIndicator(
+                progress = {
+                    if (nowPlaying.durationMs > 0L) {
+                        (nowPlaying.positionMs.toFloat() / nowPlaying.durationMs).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(0.76f),
+                color = CLASSIC_SELECTION,
+                trackColor = CLASSIC_INK.copy(alpha = 0.15f),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(0.76f),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    formatTrackDuration(nowPlaying.positionMs),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Text(
+                    formatTrackDuration(nowPlaying.durationMs),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         Text(if (nowPlaying.isPlaying) "▶" else "Ⅱ", fontWeight = FontWeight.Bold)
@@ -763,6 +793,7 @@ private fun Offset.angleAround(size: IntSize): Float {
 }
 
 private const val WHEEL_STEP_DEGREES = 18f
+private const val VOLUME_INDICATOR_DURATION_MS = 1_500L
 private val CLASSIC_BODY = Color(0xFFE3DED4)
 private val CLASSIC_WHEEL = Color(0xFFF7F4EC)
 private val CLASSIC_SCREEN = Color(0xFFFBFAF5)

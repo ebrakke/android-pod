@@ -725,13 +725,21 @@ class MainActivity : ComponentActivity() {
         controller?.seekToNextMediaItem()
     }
 
-    private fun adjustVolume(direction: Int) {
+    private fun adjustVolume(direction: Int): Float {
         val audioManager = getSystemService(AudioManager::class.java)
         audioManager.adjustStreamVolume(
             AudioManager.STREAM_MUSIC,
             if (direction > 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
-            AudioManager.FLAG_SHOW_UI,
+            0,
         )
+        val minimum = audioManager.getStreamMinVolume(AudioManager.STREAM_MUSIC)
+        val maximum = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        return if (maximum > minimum) {
+            ((current - minimum).toFloat() / (maximum - minimum)).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
     }
 
     private fun switchInterfaceMode(mode: InterfaceMode) {
