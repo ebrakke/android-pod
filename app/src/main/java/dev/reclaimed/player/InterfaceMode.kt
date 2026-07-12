@@ -4,6 +4,7 @@ import android.content.Context
 
 enum class InterfaceMode {
     Classic,
+    Hybrid,
     Touch,
 }
 

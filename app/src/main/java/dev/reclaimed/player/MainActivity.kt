@@ -262,8 +262,9 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 val jellyfinArtworkUri = { album: JellyfinAlbum -> artworkUri(album) }
-                if (interfaceMode == InterfaceMode.Classic) {
+                if (interfaceMode != InterfaceMode.Touch) {
                     ClassicPlayerShell(
+                        interfaceMode = interfaceMode,
                         libraryState = libraryState,
                         artists = artists,
                         libraryScreen = libraryScreen,
@@ -293,6 +294,14 @@ class MainActivity : ComponentActivity() {
                         onPrevious = ::previousTrack,
                         onNext = ::nextTrack,
                         onAdjustVolume = ::adjustVolume,
+                        onSeek = ::seekTo,
+                        continueOnState = continueOnState,
+                        activeSonosSession = activeSonosSession,
+                        onOpenContinueOn = ::openContinueOn,
+                        onContinueOn = ::continueOn,
+                        onDisconnectSonos = sonosSessionCoordinator::disconnect,
+                        onSwitchToHybrid = { switchInterfaceMode(InterfaceMode.Hybrid) },
+                        onSwitchToClassic = { switchInterfaceMode(InterfaceMode.Classic) },
                         onSwitchToTouch = { switchInterfaceMode(InterfaceMode.Touch) },
                         onOpenTailscale = ::openTailscale,
                         onOpenWifiSettings = {
@@ -368,7 +377,7 @@ class MainActivity : ComponentActivity() {
                         startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
                     },
                     onOpenSystemSettings = { startActivity(Intent(Settings.ACTION_SETTINGS)) },
-                        onSwitchToClassic = { switchInterfaceMode(InterfaceMode.Classic) },
+                    onSwitchToCase = { switchInterfaceMode(InterfaceMode.Hybrid) },
                     )
                 }
             }
@@ -1006,7 +1015,7 @@ class MainActivity : ComponentActivity() {
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
         insetsController.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        if (interfaceMode == InterfaceMode.Classic) {
+        if (interfaceMode != InterfaceMode.Touch) {
             insetsController.isAppearanceLightStatusBars = false
             insetsController.isAppearanceLightNavigationBars = false
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
@@ -1247,7 +1256,7 @@ private fun PlayerShell(
     onOpenWifiSettings: () -> Unit,
     onOpenBluetoothSettings: () -> Unit,
     onOpenSystemSettings: () -> Unit,
-    onSwitchToClassic: () -> Unit,
+    onSwitchToCase: () -> Unit,
 ) {
     BackHandler(enabled = libraryScreen !is LibraryScreen.Home, onBack = onBack)
     Surface(
@@ -1260,7 +1269,7 @@ private fun PlayerShell(
                 .statusBarsPadding()
                 .navigationBarsPadding(),
         ) {
-            TouchTopBar(onSwitchToClassic)
+            TouchTopBar(onSwitchToCase)
             Box(modifier = Modifier.weight(1f)) {
                 when (libraryState) {
                     LibraryState.Loading -> StatusMessage("Scanning this device…")
@@ -1393,7 +1402,7 @@ private fun PlayerShell(
 }
 
 @Composable
-private fun TouchTopBar(onSwitchToClassic: () -> Unit) {
+private fun TouchTopBar(onSwitchToCase: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1409,12 +1418,12 @@ private fun TouchTopBar(onSwitchToClassic: () -> Unit) {
             fontWeight = FontWeight.Black,
         )
         Surface(
-            modifier = Modifier.clickable(onClick = onSwitchToClassic),
+            modifier = Modifier.clickable(onClick = onSwitchToCase),
             shape = RoundedCornerShape(50),
             color = MaterialTheme.colorScheme.primaryContainer,
         ) {
             Text(
-                "CLASSIC",
+                "CASE",
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 style = MaterialTheme.typography.labelLarge,

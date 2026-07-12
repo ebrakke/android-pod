@@ -46,8 +46,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import dev.reclaimed.player.jellyfin.AlbumDownloadSummary
+import dev.reclaimed.player.homeassistant.ContinueOnState
+import dev.reclaimed.player.homeassistant.SonosPlayer
+import dev.reclaimed.player.homeassistant.SonosRemoteSession
 import dev.reclaimed.player.jellyfin.AlbumDownloadDetails
+import dev.reclaimed.player.jellyfin.AlbumDownloadSummary
 import dev.reclaimed.player.jellyfin.JellyfinAlbum
 import dev.reclaimed.player.jellyfin.JellyfinArtist
 import dev.reclaimed.player.jellyfin.JellyfinConfig
@@ -85,6 +88,7 @@ private data class ClassicMenuItem(
 
 @Composable
 internal fun ClassicPlayerShell(
+    interfaceMode: InterfaceMode,
     libraryState: LibraryState,
     artists: List<LocalArtist>,
     libraryScreen: LibraryScreen,
@@ -114,12 +118,21 @@ internal fun ClassicPlayerShell(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onAdjustVolume: (Int) -> Float?,
+    onSeek: (Long) -> Unit,
+    continueOnState: ContinueOnState,
+    activeSonosSession: SonosRemoteSession?,
+    onOpenContinueOn: () -> Unit,
+    onContinueOn: (SonosPlayer) -> Unit,
+    onDisconnectSonos: () -> Unit,
+    onSwitchToHybrid: () -> Unit,
+    onSwitchToClassic: () -> Unit,
     onSwitchToTouch: () -> Unit,
     onOpenTailscale: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenBluetoothSettings: () -> Unit,
     onOpenSystemSettings: () -> Unit,
 ) {
+    val isHybrid = interfaceMode == InterfaceMode.Hybrid
     val screenKey = libraryScreen.classicKey()
     var queueActions by remember { mutableStateOf<ClassicQueueActions?>(null) }
     var volumeLevel by remember { mutableStateOf<Float?>(null) }
@@ -164,6 +177,14 @@ internal fun ClassicPlayerShell(
             onDownloadJellyfinAlbum = onDownloadJellyfinAlbum,
             onRemoveJellyfinAlbumDownloads = onRemoveJellyfinAlbumDownloads,
             jellyfinDownloadSummary = jellyfinDownloadSummary,
+            continueOnState = continueOnState,
+            onContinueOn = onContinueOn,
+            onTogglePlayback = onTogglePlayback,
+            onAdjustVolume = onAdjustVolume,
+            onDisconnectSonos = onDisconnectSonos,
+            interfaceMode = interfaceMode,
+            onSwitchToHybrid = onSwitchToHybrid,
+            onSwitchToClassic = onSwitchToClassic,
             onSwitchToTouch = onSwitchToTouch,
             onOpenTailscale = onOpenTailscale,
             onOpenWifiSettings = onOpenWifiSettings,
@@ -191,10 +212,13 @@ internal fun ClassicPlayerShell(
 
     val selectedItem = menuItems.getOrNull(selectedIndex)
     val isNowPlaying = queueActions == null && libraryScreen is LibraryScreen.NowPlaying
-    Surface(color = CLASSIC_BODY, modifier = Modifier.fillMaxSize()) {
+    Surface(
+        color = if (isHybrid) TouchCanvas else CLASSIC_BODY,
+        modifier = Modifier.fillMaxSize(),
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Surface(
-                color = CLASSIC_SCREEN,
+                color = if (isHybrid) TouchCard else CLASSIC_SCREEN,
                 shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp),
                 shadowElevation = 5.dp,
                 modifier = Modifier
@@ -202,17 +226,48 @@ internal fun ClassicPlayerShell(
                     .weight(0.47f),
             ) {
                 if (isNowPlaying) {
-                    ClassicNowPlaying(nowPlaying, volumeLevel)
+                    if (isHybrid) {
+                        HybridNowPlaying(
+                            nowPlaying = nowPlaying,
+                            activeSonosSession = activeSonosSession,
+                            onSeek = onSeek,
+                            onOpenContinueOn = onOpenContinueOn,
+                            onDisconnectSonos = onDisconnectSonos,
+                        )
+                    } else {
+                        ClassicNowPlaying(nowPlaying, volumeLevel)
+                    }
                 } else {
-                    ClassicMenuDisplay(
-                        title = queueActions?.label ?: libraryScreen.classicTitle(jellyfinConfig),
-                        items = menuItems,
-                        selectedIndex = selectedIndex,
-                        onActivate = { index ->
-                            selectedIndex = index
-                            menuItems[index].onSelect()
-                        },
-                    )
+                    val title = queueActions?.label ?: libraryScreen.classicTitle(jellyfinConfig)
+                    val onActivate = { index: Int ->
+                        selectedIndex = index
+                        menuItems[index].onSelect()
+                    }
+                    if (isHybrid) {
+                        HybridMenuDisplay(
+                            title = title,
+                            items = menuItems.map { HybridMenuRow(it.label, it.detail) },
+                            selectedIndex = selectedIndex,
+                            nowPlaying = nowPlaying,
+                            onOpenNowPlaying = actions.onOpenNowPlaying,
+                            onStep = { direction ->
+                                if (menuItems.isNotEmpty()) {
+                                    selectedIndex = Math.floorMod(
+                                        selectedIndex + direction,
+                                        menuItems.size,
+                                    )
+                                }
+                            },
+                            onActivate = onActivate,
+                        )
+                    } else {
+                        ClassicMenuDisplay(
+                            title = title,
+                            items = menuItems,
+                            selectedIndex = selectedIndex,
+                            onActivate = onActivate,
+                        )
+                    }
                 }
             }
 
@@ -246,7 +301,7 @@ internal fun ClassicPlayerShell(
                     onMenu = {
                         if (queueActions != null) queueActions = null else onBack()
                     },
-                    onMenuLongPress = onSwitchToTouch,
+                    onMenuLongPress = if (isHybrid) onSwitchToTouch else onSwitchToHybrid,
                     onPrevious = onPrevious,
                     onNext = onNext,
                     onPlayPause = {
@@ -550,6 +605,14 @@ private fun classicItems(
     onDownloadJellyfinAlbum: (JellyfinAlbum) -> Unit,
     onRemoveJellyfinAlbumDownloads: (JellyfinAlbum) -> Unit,
     jellyfinDownloadSummary: (JellyfinAlbum) -> AlbumDownloadSummary,
+    continueOnState: ContinueOnState,
+    onContinueOn: (SonosPlayer) -> Unit,
+    onTogglePlayback: () -> Unit,
+    onAdjustVolume: (Int) -> Float?,
+    onDisconnectSonos: () -> Unit,
+    interfaceMode: InterfaceMode,
+    onSwitchToHybrid: () -> Unit,
+    onSwitchToClassic: () -> Unit,
     onSwitchToTouch: () -> Unit,
     onOpenTailscale: () -> Unit,
     onOpenWifiSettings: () -> Unit,
@@ -594,10 +657,59 @@ private fun classicItems(
             ),
         )
         add(ClassicMenuItem("Device & Sources", onSelect = actions.onOpenSources))
-        add(ClassicMenuItem("Switch to Touch Mode", onSelect = onSwitchToTouch))
+        if (interfaceMode == InterfaceMode.Hybrid) {
+            add(ClassicMenuItem("Open Full Touch", onSelect = onSwitchToTouch))
+            add(ClassicMenuItem("Switch to Classic", onSelect = onSwitchToClassic))
+        } else {
+            add(ClassicMenuItem("Switch to Hybrid", onSelect = onSwitchToHybrid))
+        }
     }
     LibraryScreen.NowPlaying -> emptyList()
-    LibraryScreen.ContinueOn -> emptyList()
+    LibraryScreen.ContinueOn -> when (continueOnState) {
+        ContinueOnState.Idle,
+        ContinueOnState.LoadingPlayers,
+        -> listOf(statusItem("Finding Sonos speakers…"))
+        is ContinueOnState.Error -> listOf(
+            ClassicMenuItem(
+                continueOnState.message,
+                "Open full Touch to edit the connection",
+                onSelect = onSwitchToTouch,
+            ),
+        )
+        is ContinueOnState.Transferring -> listOf(
+            statusItem("Continuing on ${continueOnState.player.name}…"),
+        )
+        is ContinueOnState.Ready -> if (continueOnState.players.isEmpty()) {
+            listOf(statusItem("No Sonos speakers found"))
+        } else {
+            continueOnState.players.map { player ->
+                ClassicMenuItem(
+                    player.name,
+                    player.state,
+                    onSelect = { onContinueOn(player) },
+                )
+            }
+        }
+        is ContinueOnState.Complete -> buildList {
+            add(
+                ClassicMenuItem(
+                    if (continueOnState.isPlaying) "Pause Sonos" else "Play on Sonos",
+                    continueOnState.player.name,
+                    onSelect = onTogglePlayback,
+                ),
+            )
+            add(ClassicMenuItem("Volume −", onSelect = { onAdjustVolume(-1) }))
+            add(ClassicMenuItem("Volume +", onSelect = { onAdjustVolume(1) }))
+            add(
+                ClassicMenuItem(
+                    "Disconnect",
+                    continueOnState.player.name,
+                    onSelect = onDisconnectSonos,
+                ),
+            )
+            continueOnState.error?.let { add(statusItem(it)) }
+        }
+    }
     LibraryScreen.Queue -> if (playbackQueue.items.isEmpty()) {
         listOf(statusItem("The queue is empty"))
     } else {

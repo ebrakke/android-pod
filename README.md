@@ -166,9 +166,12 @@ mise exec -- sh -c \
 - Supports background playback and system/Bluetooth media controls.
 - Serves as the device's default Home activity.
 - Separates local and remote catalogs behind a source-first home screen.
-- Offers persisted Classic and Touch interfaces over the same navigation and playback state.
+- Offers persisted Classic, case-friendly Hybrid, and full Touch interfaces over the same
+  navigation and playback state.
 - Provides a full-screen virtual Click Wheel with haptic menu navigation, transport controls,
-  volume control on Now Playing, and a long-press Menu shortcut back to Touch mode.
+  volume control on Now Playing, and a long-press Menu path from Classic through Hybrid to Touch.
+- Fits Hybrid's directly tappable and swipeable lists, mini-player, seek control, downloads, Queue,
+  and Sonos actions into the existing faceplate display opening while retaining the wheel below.
 - Authenticates to Jellyfin with Quick Connect and browses a selected music library.
 - Opens Jellyfin from an app-private compressed metadata snapshot, refreshes stale snapshots
   in the background, and schedules a network-constrained sync every six hours.
@@ -176,7 +179,7 @@ mise exec -- sh -c \
 - Downloads Jellyfin albums into app-managed storage and prefers offline copies during playback.
 - Downloads authenticated Jellyfin album artwork with each album and prefers the local cover offline.
 - Provides a shared Downloads manager with offline album browsing, status, disk usage,
-  playback, and removal controls in both Classic and Touch modes.
+  playback, and removal controls in Classic, Hybrid, and Touch modes.
 - Continues an active Jellyfin queue and playback position on Sonos through a purpose-built
   Home Assistant integration.
 

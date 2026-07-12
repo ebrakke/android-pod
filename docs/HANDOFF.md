@@ -226,7 +226,7 @@ Status: **functional one-way dock controller, Jellyfin-only**.
 
 ### Interface modes
 
-Both interfaces operate on the same navigation and playback state.
+Classic, Hybrid, and Touch operate on the same navigation and playback state.
 
 **Classic mode**
 
@@ -255,7 +255,24 @@ Both interfaces operate on the same navigation and playback state.
 - Touch Now Playing uses a large artwork surface, live seek preview with elapsed/remaining time,
   accessible circular transport targets, and Sonos-specific status and volume treatment. The
   redundant mini-player is hidden on this full player screen and remains available elsewhere.
-- A persistent, pill-shaped Classic button switches back without changing the current destination.
+- A persistent, pill-shaped Case button switches to Hybrid without changing the current
+  destination.
+
+**Hybrid mode**
+
+- Case-friendly direct touch uses the existing faceplate geometry: a compact upper viewport remains
+  aligned with the display opening while the contextual Click Wheel stays aligned with the 48 mm
+  circular opening. Hybrid is immersive like Classic and its preference survives process death.
+- Upper-window rows support direct taps and vertical swipe detents in addition to wheel rotation.
+  A persistent mini-player opens Now Playing from browsing screens.
+- Hybrid Now Playing provides directly touchable seeking, compact metadata and artwork, remote
+  Sonos status, Continue on, and disconnect actions. The wheel retains Menu/Back, Previous, Next,
+  Play/Pause, center Select, circular scrolling, volume on Now Playing, and queue-action long press.
+- Browsing, Queue, Jellyfin download/remove, and Sonos room/control actions reuse the existing
+  Classic menu model. Connection failures link to full Touch; the Hybrid home also exposes explicit
+  full Touch and Classic choices. Holding Menu moves Classic → Hybrid → Touch.
+- `HybridPlayerComponents.kt` owns the aperture-specific viewport and Now Playing presentation;
+  `ClassicPlayerShell.kt` continues to own the shared case menu and wheel interaction.
 
 **Touch verification (Pixel 6 API 36 emulator, July 12, 2026)**
 
@@ -267,8 +284,26 @@ Both interfaces operate on the same navigation and playback state.
   the Queue route, and local source browsing were exercised. Physical-Pixel checks remain pending,
   including font scaling, real album art, Jellyfin-heavy lists, and active Sonos state.
 
-Mode preference survives process death. Classic mode hides system bars with transient edge-swipe
-access; Touch mode restores them.
+**Hybrid verification (Pixel 6 API 36 emulator, July 12, 2026)**
+
+- `mise exec -- just emulator-check` passed assemble, lint, JVM tests, install, cold launch, crash
+  check, screenshot, and UI hierarchy capture. A final `assembleDebug lintDebug testDebugUnitTest`
+  pass and emulator smoke reinstall also passed after the UI was split into its focused file.
+- Full Touch → Case opened Hybrid, a direct upper-row tap opened Now Playing, an upward viewport
+  swipe moved selection from item 1 to item 6, and the full Touch escape returned successfully.
+  Hybrid restored after a force-stop/relaunch with system bars hidden.
+- The direct seek slider moved the paused 30-second fixture to 0:15. The emulator was left paused.
+- The stable-key debug APK upgraded the physical GrapheneOS Pixel 6 without clearing data. Hybrid
+  rendered the real 252-artist/4,034-track catalog, downloaded-album summary, 8-track queue, artwork,
+  and compact Now Playing state. Automated upper-window taps and swipes worked, and Continue on
+  discovered nine HA Sonos entities without starting a handoff. The Pixel was left paused on the
+  Hybrid home screen.
+- Hands-on validation with the printed faceplate remains required for aperture-edge taps, circular
+  wheel gestures, accidental touches, one-handed reach, download/remove actions, direct seeking,
+  and an actual Sonos handoff/disconnect cycle.
+
+Mode preference survives process death. Classic and Hybrid hide system bars with transient
+edge-swipe access; Touch restores them.
 
 ### Pixel 6 enclosure prototype
 
