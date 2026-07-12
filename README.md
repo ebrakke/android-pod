@@ -6,28 +6,79 @@ A purpose-built Android media appliance, initially targeting the Google Pixel 6 
      alt="Classic mode showing a restored offline Jellyfin track"
      width="360">
 
-## CLI setup
+## Development setup
+
+[`mise`](https://mise.jdx.dev/getting-started.html) is the only development tool that must be
+installed outside the repository. On macOS, install it with `brew install mise`. The checked-in
+`mise.toml` then provides Java 17, Android command-line tools, and `just`; Gradle itself is provided
+by the checked-in wrapper.
+
+For a new checkout, run:
 
 ```sh
-. scripts/android-env.sh
-./gradlew assembleDebug
-./gradlew installDebug
+mise trust
+mise install
+mise exec -- just setup
+mise exec -- just doctor
 ```
+
+`just setup` presents the Android license prompts and installs platform-tools, the Android 36 SDK,
+and build-tools 36.0.0. Run it again if the required SDK packages change. After pulling changes to
+`mise.toml`, run `mise install` again to install any newly declared tool versions.
+
+### Daily commands
+
+If mise is [activated in your shell](https://mise.jdx.dev/getting-started.html#activate-mise), run
+recipes directly:
+
+```sh
+just check
+just devices
+just install
+```
+
+Shell activation is optional. Without it, run the same recipes through mise so the repository's
+tool versions and environment are active for that command:
+
+```sh
+mise exec -- just check
+mise exec -- just devices
+mise exec -- just install
+```
+
+Run `just` or `mise exec -- just` to list all recipes.
+
+| Recipe | Purpose |
+| --- | --- |
+| `setup` | Accept Android licenses and install required SDK packages. |
+| `doctor` | Verify Java, Android SDK, build-tools, and ADB availability. |
+| `build` | Compile the debug APK. |
+| `lint` | Run Android lint for the debug build. |
+| `test` | Run debug unit tests. |
+| `check` | Run build, lint, and unit tests together. |
+| `devices` | List connected Android devices. |
+| `install` | Install a debug APK while preserving app data. |
+| `tasks` | List every available Gradle task. |
+| `clean` | Remove generated build output. |
+
+Every recipe loads `scripts/android-env.sh`. It preserves mise's environment while retaining the
+old Homebrew paths as a fallback for direct Gradle or ADB use.
 
 The initial proof of concept is both a normal launchable activity and an Android Home candidate. This lets us test the shell without removing the existing launcher.
 
 ## Device workflow
 
 ```sh
-. scripts/android-env.sh
-./gradlew installDebug
-adb shell cmd package set-home-activity --user 0 dev.reclaimed.player/.MainActivity
+mise exec -- just install
+mise exec -- sh -c \
+  '. scripts/android-env.sh && adb shell cmd package set-home-activity --user 0 dev.reclaimed.player/.MainActivity'
 ```
 
 Restore the standard GrapheneOS launcher with:
 
 ```sh
-adb shell cmd package set-home-activity --user 0 com.android.launcher3/.uioverrides.QuickstepLauncher
+mise exec -- sh -c \
+  '. scripts/android-env.sh && adb shell cmd package set-home-activity --user 0 com.android.launcher3/.uioverrides.QuickstepLauncher'
 ```
 
 ## Current proof of concept

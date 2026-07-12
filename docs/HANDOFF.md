@@ -20,23 +20,28 @@ should preserve their identity instead of being merged into one ambiguous catalo
 
 ## Repository and workspace
 
-- Repository: `~/code/reclaimed-player`
+- Repository: `~/code/android-pod`
 - Branch: `main`
 - Initial baseline commit: `05e7d63 Initial Reclaimed Player proof of concept`
 - The project uses Gradle from the command line; Android Studio is not required.
 
-Build and install:
+The repository uses `mise.toml` to provision Java 17, Android command-line tools, and `just`. After
+installing mise, bootstrap a checkout and install the required Android SDK packages:
 
 ```sh
-cd ~/code/reclaimed-player
-. scripts/android-env.sh
-./gradlew assembleDebug
-./gradlew lintDebug
-./gradlew installDebug
+cd ~/code/android-pod
+mise trust
+mise install
+mise exec -- just setup
+mise exec -- just doctor
 ```
 
-The environment script configures the Homebrew JDK 17 and Android command-line SDK paths.
-Use `adb devices -l` to confirm that the Pixel is connected before installing.
+When mise is activated in the shell, use `just check`, `just devices`, and `just install` directly.
+Otherwise prefix them with `mise exec --`. Each recipe sources the environment script, which
+preserves mise-provided paths and retains the previous Homebrew paths as a fallback. Direct Gradle
+or ADB commands remain supported after manually sourcing `scripts/android-env.sh` in a mise-managed
+shell. The README's Development setup section is the canonical command reference and explains
+first-time setup, shell activation, and every available recipe.
 
 The app is registered as both a normal launcher activity and an Android Home candidate. It is
 currently being used as the Pixel's default Home app. The README contains CLI commands for
