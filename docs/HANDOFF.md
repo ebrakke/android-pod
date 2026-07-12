@@ -204,7 +204,9 @@ Both interfaces operate on the same navigation and playback state.
 - Selection remains active throughout a continuous circular gesture.
 - Center selects, Menu goes back, and holding Menu switches to Touch mode.
 - Previous, Next, and Play/Pause retain their transport meanings.
-- On Now Playing, wheel rotation changes system media volume.
+- On Now Playing during device playback, wheel rotation changes system media volume and temporarily
+  replaces the track progress/timing area with an iPod-style volume meter; it does not open
+  Android's volume panel. An active Sonos handoff continues to route wheel volume remotely.
 - Wheel segment buttons suppress rectangular Compose ripples and the whole wheel is circularly
   clipped. The center button retains circular pressed feedback.
 - Menu rows use a fixed compact height so one-item lists do not expand to fill the display.
