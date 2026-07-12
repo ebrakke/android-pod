@@ -2,6 +2,9 @@
 .kotlin/
 local.properties
 **/build/
+__pycache__/
+*.py[cod]
+reclaimed-player-home-assistant.zip
 *.iml
 .DS_Store
 mise.local.toml

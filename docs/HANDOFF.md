@@ -59,6 +59,19 @@ hardware behavior. Default-Home behavior, Bluetooth/headset controls, audio focu
 screen-off playback, Tailscale transitions, reboot restoration, and real device storage/battery
 behavior remain physical-Pixel acceptance requirements.
 
+Physical-device APKs use the stable debug signing key at
+`~/.config/reclaimed-player/reclaimed-player-debug.keystore`. The key is intentionally outside the
+repository and must be backed up and copied between development computers. `just install` refuses
+to install without it; `just signing-create` is only for creating the first key and must never be
+used to replace a lost key after an APK has been installed.
+
+Home Assistant integration deployment uses a separate Ed25519 key at
+`~/.ssh/reclaimed_player_ha`. After its public key is authorized in HA's SSH app, `just ha-deploy`
+stages and compiles the custom component, runs `ha core check` with automatic rollback, restarts
+Core, and waits for the API to become healthy. The verified endpoint is `root@192.168.68.60:22`,
+with its host key pinned in `~/.ssh/reclaimed_player_ha_lan_known_hosts`; defaults can be overridden
+with the `HA_SSH_*` environment variables.
+
 The app is registered as both a normal launcher activity and an Android Home candidate. It is
 currently being used as the Pixel's default Home app. The README contains CLI commands for
 selecting Reclaimed Player or restoring the GrapheneOS launcher.
@@ -113,6 +126,71 @@ selecting Reclaimed Player or restoring the GrapheneOS launcher.
   at restore time, preferring Jellyfin downloads before authenticated streams.
 - Now Playing shows authenticated/local artwork, elapsed time, duration, a live progress bar,
   and only the current play/pause state.
+
+### Home Assistant and Sonos handoff
+
+- Touch Now Playing offers **Continue on…** for active Jellyfin queues.
+- Home Assistant connection settings and its long-lived token are stored in Android
+  Keystore-backed encrypted app storage.
+- `home-assistant/custom_components/reclaimed_player/` provides a manually installed custom
+  integration that discovers native Sonos media-player entities and accepts stable Jellyfin track
+  IDs, queue index, position, and playing intent.
+- The integration rebuilds the Sonos queue through Home Assistant's native Sonos actions and
+  proxies Jellyfin audio with authenticated range requests. Sonos receives opaque 24-hour stream
+  URLs rather than the permanent Jellyfin credential.
+- The Android player pauses only after Home Assistant reports that the handoff action succeeded.
+- The current implementation is intentionally Jellyfin-only and one-way. Remote controls, reverse
+  handoff, NFC/Qi dock triggers, Sonos grouping UI, durable proxy grants across HA restart, and
+  shuffle-order transfer are not yet implemented.
+- Installation and connection steps are documented in the README. Physical HA/Jellyfin/Sonos
+  acceptance testing remains outstanding.
+- On July 12, 2026, the current debug APK was installed and launched successfully on the physical
+  GrapheneOS Pixel 6. Touch-mode Home Assistant settings were visually inspected, Reclaimed Player
+  was restored as the default Home activity, and playback was left paused. Live Home Assistant,
+  Jellyfin proxy, Sonos queue, seek, and position-handoff behavior were not exercised because HA
+  was not configured yet.
+- The device's historical APK used a lost debug signing key. With user approval, a one-time
+  uninstall/reinstall established the stable external signing key described above. Two recorded
+  downloaded-album directories (approximately 197 MB total) and their non-secret app records were
+  restored; their in-app visibility still requires Jellyfin reconnection and verification.
+- Home Assistant token QR scanning was then verified on the physical Pixel: the scanned credential
+  authenticated successfully and discovered the configured Sonos players. The scanner is forced to
+  portrait after the first device pass exposed the library's landscape default. The first live
+  Continue on attempt returned an opaque HTTP 500. Integration version 0.1.1 now prefers HA's
+  internal URL but falls back to its external URL when creating Sonos-reachable proxy links, and
+  returns stage-specific handoff failures to the Android UI. The next live attempt exposed Sonos
+  UPnP error 714 because the opaque audio URL had no file extension. Version 0.1.2 looks up each
+  Jellyfin track's container and exposes matching `.mp3`, `.flac`, and other Sonos-compatible proxy
+  paths and content types. The first lookup incorrectly requested the invalid Jellyfin field
+  `MediaSources`, producing HTTP 400; version 0.1.3 removes that unnecessary query parameter and
+  includes bounded Jellyfin error detail in future failures. An automated physical-device retry
+  then confirmed that the configured credential is a user token, for which Jellyfin also rejects
+  the server-level `/Items/{id}` route. Version 0.1.4 discovers `/Users/Me` and uses the user-scoped
+  item route, while retaining an unscoped query fallback for server API keys. That allowed the
+  complete queue to be built, exposing that the selected Den entity is a grouped member and cannot
+  receive `sonos.play_queue` directly. Version 0.1.5 resolves the first `group_members` entity—the
+  coordinator, per HA Sonos topology—and targets the group coordinator automatically. The final
+  automated physical-device retry succeeded with the 12-track Sound & Color queue on Den: HA
+  rebuilt the queue, selected track 1, sought to roughly 1:07, preserved paused intent, and the
+  Android UI reported success before pausing its local session. Active-playing intent and other
+  Sonos targets remain untested. A Kitchen test then revealed that HA Sonos treats direct-URL
+  `enqueue=replace` as standalone playback rather than clearing and populating the Sonos queue; the
+  old 57-track queue remained active. Version 0.2.1 explicitly clears the coordinator playlist,
+  adds every proxy URL to the empty queue, and only then calls `sonos.play_queue`. The follow-up
+  physical Kitchen test verified 12 tracks through Sonos UPnP, a Reclaimed Player `.mp3` proxy URI,
+  and a seek from 1:11 to 1:15 while playing. HA 0.2.0 also adds coordinator-aware remote
+  Play/Pause; the Continue on screen, Touch controls, persistent bottom player, and Classic wheel
+  transport route to Sonos for the active in-memory handoff session. The test finished with both
+  the Pixel and Kitchen Sonos paused.
+- HA 0.3.0 adds coordinator-aware `volume_up`/`volume_down` commands. Touch Now Playing and Continue
+  on expose explicit volume buttons; physical Android volume keys and Classic Now Playing wheel
+  rotation route through the same active Sonos session. Kitchen was verified from volume 27 to 29
+  and restored to 27 with the physical-volume-key path. The first command encountered a transient
+  Sonos port-1400 timeout; its error was shown in the UI, a retry succeeded, and subsequent success
+  now clears the stale error.
+- Touch navigation now treats Continue on as a child of Now Playing. Opening Now Playing from the
+  persistent bar while on Continue on no longer overwrites the remembered Music Sources return
+  destination and traps navigation in a two-screen loop.
 
 ### Interface modes
 
@@ -282,6 +360,17 @@ Before adding another music provider, split the current implementation into:
 Do not create an elaborate universal provider framework prematurely. Let local music and Jellyfin
 define the first useful boundary; reconsider it only when a second remote provider is actually
 being implemented.
+
+### 8. Build iHome-style household handoff — initial Continue on slice implemented
+
+- Verify a full ordered Jellyfin album can continue on each target Sonos player.
+- Verify the selected queue index and playback position are preserved closely enough for a natural
+  handoff, and that paused intent remains paused.
+- Add remote Sonos Now Playing state and transport/volume controls in Touch mode.
+- Persist handoff session identity in Home Assistant and implement reverse handoff to the Pixel.
+- Add an NFC/Qi dock identity that maps each physical mount to a Sonos player or group.
+- Debounce tag removal and use charging state as a corroborating dock signal.
+- Keep provider identities explicit; Home Assistant is an output coordinator, not a merged catalog.
 
 ## Suggested first task for the next session
 

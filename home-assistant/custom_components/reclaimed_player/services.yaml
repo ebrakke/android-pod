@@ -1,0 +1,62 @@
+list_players:
+  name: List Sonos players
+  description: Lists Sonos media-player entities available for Reclaimed Player handoff.
+
+continue_on:
+  name: Continue on Sonos
+  description: Rebuilds a Jellyfin queue on a Sonos player and resumes its position.
+  fields:
+    entity_id:
+      name: Sonos player
+      required: true
+      selector:
+        entity:
+          domain: media_player
+          integration: sonos
+    track_ids:
+      name: Jellyfin track IDs
+      required: true
+      example:
+        - "ad87d18f22f44ab7aee99d2f90c8a119"
+        - "617342a278354368aafc89f216755e7e"
+    current_index:
+      name: Current queue index
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box
+    position_ms:
+      name: Position in milliseconds
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box
+    was_playing:
+      name: Resume playback
+      required: true
+      selector:
+        boolean:
+
+control:
+  name: Control Sonos playback
+  description: Plays or pauses the active Reclaimed Player queue on a Sonos group.
+  fields:
+    entity_id:
+      name: Sonos player
+      required: true
+      selector:
+        entity:
+          domain: media_player
+          integration: sonos
+    command:
+      name: Command
+      required: true
+      selector:
+        select:
+          options:
+            - play
+            - pause
+            - volume_up
+            - volume_down

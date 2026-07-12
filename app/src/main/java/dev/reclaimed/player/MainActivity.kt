@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -73,6 +74,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import dev.reclaimed.player.jellyfin.JellyfinClient
 import dev.reclaimed.player.jellyfin.AlbumDownloadSummary
 import dev.reclaimed.player.jellyfin.AlbumDownloadDetails
@@ -86,6 +89,14 @@ import dev.reclaimed.player.jellyfin.JellyfinMetadataSnapshot
 import dev.reclaimed.player.jellyfin.JellyfinSettingsStore
 import dev.reclaimed.player.jellyfin.JellyfinSyncScheduler
 import dev.reclaimed.player.jellyfin.JellyfinTrack
+import dev.reclaimed.player.homeassistant.HomeAssistantClient
+import dev.reclaimed.player.homeassistant.HomeAssistantConfig
+import dev.reclaimed.player.homeassistant.HomeAssistantSettingsStore
+import dev.reclaimed.player.homeassistant.JellyfinHandoff
+import dev.reclaimed.player.homeassistant.SonosPlayer
+import dev.reclaimed.player.homeassistant.ContinueOnScreen
+import dev.reclaimed.player.homeassistant.ContinueOnState
+import dev.reclaimed.player.homeassistant.parseHomeAssistantTokenQr
 import dev.reclaimed.player.library.LocalAlbum
 import dev.reclaimed.player.library.LocalArtist
 import dev.reclaimed.player.library.LocalTrack
@@ -99,6 +110,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private var artists by mutableStateOf<List<LocalArtist>>(emptyList())
@@ -118,9 +130,14 @@ class MainActivity : ComponentActivity() {
     private var jellyfinConnectionState by mutableStateOf<JellyfinConnectionState>(
         JellyfinConnectionState.Idle,
     )
+    private var homeAssistantConfig by mutableStateOf(HomeAssistantConfig())
+    private var continueOnState by mutableStateOf<ContinueOnState>(ContinueOnState.Idle)
+    private var activeSonosSession by mutableStateOf<ActiveSonosSession?>(null)
+    private val sonosVolumeExecutor = Executors.newSingleThreadExecutor()
     private lateinit var jellyfinSettingsStore: JellyfinSettingsStore
     private lateinit var jellyfinMetadataCache: JellyfinMetadataCache
     private lateinit var jellyfinDownloadStore: JellyfinDownloadStore
+    private lateinit var homeAssistantSettingsStore: HomeAssistantSettingsStore
     private lateinit var interfaceModeStore: InterfaceModeStore
     private var downloadRevision by mutableStateOf(0)
     private var controllerFuture: ListenableFuture<MediaController>? = null
@@ -147,22 +164,38 @@ class MainActivity : ComponentActivity() {
     ) { granted ->
         if (granted) loadLibrary() else libraryState = LibraryState.PermissionDenied
     }
+    private var pendingHomeAssistantServerUrl = ""
+    private val homeAssistantTokenScanner = registerForActivityResult(ScanContract()) { result ->
+        val contents = result.contents ?: return@registerForActivityResult
+        val token = parseHomeAssistantTokenQr(contents)
+        if (token == null) {
+            continueOnState = ContinueOnState.Error(
+                "That QR code does not contain a Home Assistant access token.",
+            )
+        } else {
+            connectHomeAssistant(pendingHomeAssistantServerUrl, token)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         jellyfinSettingsStore = JellyfinSettingsStore(this)
         jellyfinMetadataCache = JellyfinMetadataCache(this)
         jellyfinDownloadStore = JellyfinDownloadStore(this)
+        homeAssistantSettingsStore = HomeAssistantSettingsStore(this)
         interfaceModeStore = InterfaceModeStore(this)
         interfaceMode = interfaceModeStore.load()
         jellyfinConfig = jellyfinSettingsStore.load()
+        homeAssistantConfig = homeAssistantSettingsStore.load()
         enableEdgeToEdge()
         applyInterfaceMode()
         setContent {
             MaterialTheme {
                 val openNowPlaying = {
                     if (nowPlaying != null && libraryScreen !is LibraryScreen.NowPlaying) {
-                        screenBeforeNowPlaying = libraryScreen
+                        if (libraryScreen !is LibraryScreen.ContinueOn) {
+                            screenBeforeNowPlaying = libraryScreen
+                        }
                         libraryScreen = LibraryScreen.NowPlaying
                     }
                 }
@@ -264,6 +297,9 @@ class MainActivity : ComponentActivity() {
                     onOpenAlbum = commonShell.onOpenAlbum,
                     onOpenNowPlaying = commonShell.onOpenNowPlaying,
                     onOpenQueue = commonShell.onOpenQueue,
+                    homeAssistantConfig = homeAssistantConfig,
+                    continueOnState = continueOnState,
+                    sonosSessionActive = activeSonosSession != null,
                     onBack = ::navigateBack,
                     onPlayAlbum = { album -> play(album, 0) },
                     onPlayTrack = ::play,
@@ -280,9 +316,14 @@ class MainActivity : ComponentActivity() {
                     jellyfinDownloadSummary = jellyfinDownloadStore::summary,
                     onRefreshDownloads = { downloadRevision += 1 },
                     onTogglePlayback = ::togglePlayback,
+                    onAdjustVolume = ::adjustVolume,
                     onConnectJellyfin = ::connectJellyfin,
                     onStartQuickConnect = ::startQuickConnect,
                     onSelectJellyfinLibrary = ::selectJellyfinLibrary,
+                    onConnectHomeAssistant = ::connectHomeAssistant,
+                    onScanHomeAssistantToken = ::scanHomeAssistantToken,
+                    onOpenContinueOn = ::openContinueOn,
+                    onContinueOn = ::continueOn,
                     onOpenTailscale = ::openTailscale,
                     onOpenWifiSettings = { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) },
                     onOpenBluetoothSettings = {
@@ -332,6 +373,22 @@ class MainActivity : ComponentActivity() {
         if (::jellyfinDownloadStore.isInitialized) downloadRevision += 1
     }
 
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (activeSonosSession != null) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP -> {
+                    adjustVolume(1)
+                    return true
+                }
+                KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                    adjustVolume(-1)
+                    return true
+                }
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
     override fun onStop() {
         progressHandler.removeCallbacks(progressUpdater)
         controller?.removeListener(playerListener)
@@ -341,10 +398,16 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
+    override fun onDestroy() {
+        sonosVolumeExecutor.shutdownNow()
+        super.onDestroy()
+    }
+
     private fun navigateBack() {
         libraryScreen = when (val current = libraryScreen) {
             LibraryScreen.Home -> current
             LibraryScreen.NowPlaying -> screenBeforeNowPlaying
+            LibraryScreen.ContinueOn -> LibraryScreen.NowPlaying
             LibraryScreen.Queue -> LibraryScreen.Home
             LibraryScreen.Artists -> LibraryScreen.Home
             LibraryScreen.ManageSources -> LibraryScreen.Home
@@ -385,6 +448,127 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun connectHomeAssistant(serverUrl: String, accessToken: String) {
+        val normalizedUrl = serverUrl.trim().trimEnd('/')
+        val savedConfig = homeAssistantSettingsStore.load()
+        val resolvedToken = accessToken.trim().ifEmpty {
+            savedConfig.accessToken.takeIf { normalizedUrl == savedConfig.serverUrl }.orEmpty()
+        }
+        val config = HomeAssistantConfig(normalizedUrl, resolvedToken)
+        continueOnState = ContinueOnState.LoadingPlayers
+        Thread {
+            val result = runCatching { HomeAssistantClient(config).getSonosPlayers() }
+            runOnUiThread {
+                continueOnState = result.fold(
+                    onSuccess = {
+                        homeAssistantConfig = homeAssistantSettingsStore.save(
+                            normalizedUrl,
+                            resolvedToken,
+                        )
+                        ContinueOnState.Ready(it)
+                    },
+                    onFailure = {
+                        ContinueOnState.Error(
+                            it.message ?: "Unable to connect to Home Assistant",
+                        )
+                    },
+                )
+            }
+        }.start()
+    }
+
+    private fun scanHomeAssistantToken(serverUrl: String) {
+        pendingHomeAssistantServerUrl = serverUrl.trim().trimEnd('/')
+        if (pendingHomeAssistantServerUrl.isBlank()) {
+            continueOnState = ContinueOnState.Error(
+                "Enter the Home Assistant URL before scanning its token.",
+            )
+            return
+        }
+        homeAssistantTokenScanner.launch(
+            ScanOptions()
+                .setDesiredBarcodeFormats(listOf("QR_CODE"))
+                .setPrompt("Scan the Home Assistant token QR code")
+                .setBeepEnabled(false)
+                .setBarcodeImageEnabled(false)
+                .setOrientationLocked(true),
+        )
+    }
+
+    private fun openContinueOn() {
+        libraryScreen = LibraryScreen.ContinueOn
+        if (!homeAssistantConfig.isConfigured) {
+            continueOnState = ContinueOnState.Error(
+                "Connect Home Assistant in Manage Sources first.",
+            )
+            return
+        }
+        continueOnState = ContinueOnState.LoadingPlayers
+        Thread {
+            val result = runCatching {
+                HomeAssistantClient(homeAssistantConfig).getSonosPlayers()
+            }
+            runOnUiThread {
+                continueOnState = result.fold(
+                    onSuccess = { ContinueOnState.Ready(it) },
+                    onFailure = {
+                        ContinueOnState.Error(it.message ?: "Unable to load Sonos players")
+                    },
+                )
+            }
+        }.start()
+    }
+
+    private fun continueOn(player: SonosPlayer) {
+        val handoff = currentJellyfinHandoff().getOrElse {
+            continueOnState = ContinueOnState.Error(
+                it.message ?: "Only Jellyfin queues can continue on Sonos right now.",
+            )
+            return
+        }
+        continueOnState = ContinueOnState.Transferring(player)
+        Thread {
+            val result = runCatching {
+                HomeAssistantClient(homeAssistantConfig).continueOn(player, handoff)
+            }
+            runOnUiThread {
+                result.onSuccess {
+                    activeSonosSession = ActiveSonosSession(player, handoff.wasPlaying)
+                    nowPlaying = nowPlaying?.copy(isPlaying = handoff.wasPlaying)
+                    controller?.pause()
+                    continueOnState = ContinueOnState.Complete(player, handoff.wasPlaying)
+                }.onFailure {
+                    continueOnState = ContinueOnState.Error(
+                        it.message ?: "Unable to continue playback on ${player.name}",
+                    )
+                }
+            }
+        }.start()
+    }
+
+    private fun currentJellyfinHandoff(): Result<JellyfinHandoff> = runCatching {
+        val player = checkNotNull(controller) { "Playback is not connected" }
+        check(player.mediaItemCount > 0) { "Nothing is queued" }
+        check(!player.shuffleModeEnabled) {
+            "Turn shuffle off before continuing on Sonos. Shuffle-order handoff is not ready yet."
+        }
+        val trackIds = (0 until player.mediaItemCount).map { index ->
+            val extras = player.getMediaItemAt(index).mediaMetadata.extras
+            check(extras?.getString(PlaybackItemMetadata.SOURCE) == PlaybackSource.JELLYFIN.name) {
+                "Only all-Jellyfin queues can continue on Sonos right now."
+            }
+            checkNotNull(extras.getString(PlaybackItemMetadata.SOURCE_ID)) {
+                "A queued Jellyfin track has no stable ID"
+            }
+        }
+        JellyfinHandoff(
+            trackIds = trackIds,
+            currentIndex = player.currentMediaItemIndex.coerceIn(trackIds.indices),
+            positionMs = player.currentPosition.coerceAtLeast(0L),
+            wasPlaying = player.playWhenReady,
+        )
     }
 
     private fun startQuickConnect(serverUrl: String) {
@@ -712,6 +896,44 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun togglePlayback() {
+        val sonosSession = activeSonosSession
+        if (sonosSession != null) {
+            val requestedPlaying = !sonosSession.isPlaying
+            activeSonosSession = sonosSession.copy(isPlaying = requestedPlaying)
+            nowPlaying = nowPlaying?.copy(isPlaying = requestedPlaying)
+            continueOnState = ContinueOnState.Complete(
+                player = sonosSession.player,
+                isPlaying = requestedPlaying,
+                isChanging = true,
+            )
+            Thread {
+                val result = runCatching {
+                    HomeAssistantClient(homeAssistantConfig).setSonosPlayback(
+                        sonosSession.player,
+                        requestedPlaying,
+                    )
+                }
+                runOnUiThread {
+                    result.onSuccess { isPlaying ->
+                        activeSonosSession = sonosSession.copy(isPlaying = isPlaying)
+                        nowPlaying = nowPlaying?.copy(isPlaying = isPlaying)
+                        continueOnState = ContinueOnState.Complete(
+                            sonosSession.player,
+                            isPlaying,
+                        )
+                    }.onFailure { error ->
+                        activeSonosSession = sonosSession
+                        nowPlaying = nowPlaying?.copy(isPlaying = sonosSession.isPlaying)
+                        continueOnState = ContinueOnState.Complete(
+                            player = sonosSession.player,
+                            isPlaying = sonosSession.isPlaying,
+                            error = error.message ?: "Unable to control Sonos playback",
+                        )
+                    }
+                }
+            }.start()
+            return
+        }
         controller?.let { if (it.isPlaying) it.pause() else it.play() }
     }
 
@@ -726,6 +948,35 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun adjustVolume(direction: Int) {
+        val sonosSession = activeSonosSession
+        if (sonosSession != null) {
+            sonosVolumeExecutor.execute {
+                runCatching {
+                    HomeAssistantClient(homeAssistantConfig).adjustSonosVolume(
+                        sonosSession.player,
+                        direction,
+                    )
+                }.onSuccess {
+                    runOnUiThread {
+                        val current = activeSonosSession ?: return@runOnUiThread
+                        continueOnState = ContinueOnState.Complete(
+                            player = current.player,
+                            isPlaying = current.isPlaying,
+                        )
+                    }
+                }.onFailure { error ->
+                    runOnUiThread {
+                        val current = activeSonosSession ?: return@runOnUiThread
+                        continueOnState = ContinueOnState.Complete(
+                            player = current.player,
+                            isPlaying = current.isPlaying,
+                            error = error.message ?: "Unable to adjust Sonos volume",
+                        )
+                    }
+                }
+            }
+            return
+        }
         val audioManager = getSystemService(AudioManager::class.java)
         audioManager.adjustStreamVolume(
             AudioManager.STREAM_MUSIC,
@@ -757,8 +1008,11 @@ class MainActivity : ComponentActivity() {
             NowPlaying(
                 title = title,
                 artist = metadata.artist?.toString().orEmpty(),
+                source = metadata.extras?.getString(PlaybackItemMetadata.SOURCE)?.let {
+                    runCatching { PlaybackSource.valueOf(it) }.getOrNull()
+                },
                 artworkUri = metadata.artworkUri,
-                isPlaying = player.isPlaying,
+                isPlaying = activeSonosSession?.isPlaying ?: player.isPlaying,
                 positionMs = player.currentPosition.coerceAtLeast(0L),
                 durationMs = player.duration.takeIf { it > 0L } ?: 0L,
                 queueIndex = player.currentMediaItemIndex,
@@ -807,6 +1061,7 @@ internal sealed interface LibraryState {
 internal sealed interface LibraryScreen {
     data object Home : LibraryScreen
     data object NowPlaying : LibraryScreen
+    data object ContinueOn : LibraryScreen
     data object Queue : LibraryScreen
     data object Artists : LibraryScreen
     data object ManageSources : LibraryScreen
@@ -837,12 +1092,18 @@ private sealed interface JellyfinConnectionState {
 internal data class NowPlaying(
     val title: String,
     val artist: String,
+    val source: PlaybackSource?,
     val artworkUri: Uri?,
     val isPlaying: Boolean,
     val positionMs: Long,
     val durationMs: Long,
     val queueIndex: Int,
     val queueSize: Int,
+)
+
+private data class ActiveSonosSession(
+    val player: SonosPlayer,
+    val isPlaying: Boolean,
 )
 
 internal data class PlaybackQueueItem(
@@ -885,6 +1146,9 @@ private fun PlayerShell(
     jellyfinConnectionState: JellyfinConnectionState,
     jellyfinArtists: List<JellyfinArtist>,
     jellyfinLibraryState: JellyfinLibraryState,
+    homeAssistantConfig: HomeAssistantConfig,
+    continueOnState: ContinueOnState,
+    sonosSessionActive: Boolean,
     downloadRevision: Int,
     managedDownloads: List<AlbumDownloadDetails>,
     jellyfinArtworkUri: (JellyfinAlbum) -> Uri,
@@ -915,9 +1179,14 @@ private fun PlayerShell(
     jellyfinDownloadSummary: (JellyfinAlbum) -> AlbumDownloadSummary,
     onRefreshDownloads: () -> Unit,
     onTogglePlayback: () -> Unit,
+    onAdjustVolume: (Int) -> Unit,
     onConnectJellyfin: (String, String) -> Unit,
     onStartQuickConnect: (String) -> Unit,
     onSelectJellyfinLibrary: (JellyfinLibrary) -> Unit,
+    onConnectHomeAssistant: (String, String) -> Unit,
+    onScanHomeAssistantToken: (String) -> Unit,
+    onOpenContinueOn: () -> Unit,
+    onContinueOn: (SonosPlayer) -> Unit,
     onOpenTailscale: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenBluetoothSettings: () -> Unit,
@@ -953,7 +1222,17 @@ private fun PlayerShell(
                             nowPlaying = nowPlaying,
                             onBack = onBack,
                             onTogglePlayback = onTogglePlayback,
+                            sonosSessionActive = sonosSessionActive,
+                            onAdjustVolume = onAdjustVolume,
                             onOpenQueue = onOpenQueue,
+                            onOpenContinueOn = onOpenContinueOn,
+                        )
+                        LibraryScreen.ContinueOn -> ContinueOnScreen(
+                            state = continueOnState,
+                            onContinueOn = onContinueOn,
+                            onTogglePlayback = onTogglePlayback,
+                            onAdjustVolume = onAdjustVolume,
+                            onBack = onBack,
                         )
                         LibraryScreen.Queue -> QueueScreen(
                             queue = playbackQueue,
@@ -994,12 +1273,16 @@ private fun PlayerShell(
                         )
                         LibraryScreen.ManageSources -> SourcesScreen(
                             config = jellyfinConfig,
+                            homeAssistantConfig = homeAssistantConfig,
+                            continueOnState = continueOnState,
                             libraries = jellyfinLibraries,
                             connectionState = jellyfinConnectionState,
                             onBack = onBack,
                             onConnect = onConnectJellyfin,
                             onStartQuickConnect = onStartQuickConnect,
                             onSelectLibrary = onSelectJellyfinLibrary,
+                            onConnectHomeAssistant = onConnectHomeAssistant,
+                            onScanHomeAssistantToken = onScanHomeAssistantToken,
                             onOpenTailscale = onOpenTailscale,
                             onOpenWifiSettings = onOpenWifiSettings,
                             onOpenBluetoothSettings = onOpenBluetoothSettings,
@@ -1429,12 +1712,16 @@ private fun DownloadsScreen(
 @Composable
 private fun SourcesScreen(
     config: JellyfinConfig,
+    homeAssistantConfig: HomeAssistantConfig,
+    continueOnState: ContinueOnState,
     libraries: List<JellyfinLibrary>,
     connectionState: JellyfinConnectionState,
     onBack: () -> Unit,
     onConnect: (String, String) -> Unit,
     onStartQuickConnect: (String) -> Unit,
     onSelectLibrary: (JellyfinLibrary) -> Unit,
+    onConnectHomeAssistant: (String, String) -> Unit,
+    onScanHomeAssistantToken: (String) -> Unit,
     onOpenTailscale: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenBluetoothSettings: () -> Unit,
@@ -1442,6 +1729,10 @@ private fun SourcesScreen(
 ) {
     var serverUrl by remember(config.serverUrl) { mutableStateOf(config.serverUrl) }
     var apiKey by remember(config.serverUrl) { mutableStateOf("") }
+    var homeAssistantUrl by remember(homeAssistantConfig.serverUrl) {
+        mutableStateOf(homeAssistantConfig.serverUrl)
+    }
+    var homeAssistantToken by remember(homeAssistantConfig.serverUrl) { mutableStateOf("") }
 
     LazyColumn(
         modifier = Modifier
@@ -1470,6 +1761,93 @@ private fun SourcesScreen(
                 TextButton(onClick = onOpenBluetoothSettings) { Text("Bluetooth") }
             }
             TextButton(onClick = onOpenSystemSettings) { Text("All system settings") }
+            HorizontalDivider()
+        }
+        item {
+            Text("Home Assistant", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "Connect to the Reclaimed Player integration for Jellyfin handoff to Sonos.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = homeAssistantUrl,
+                onValueChange = { homeAssistantUrl = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Home Assistant URL") },
+                placeholder = { Text("http://homeassistant.local:8123") },
+                singleLine = true,
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = homeAssistantToken,
+                onValueChange = { homeAssistantToken = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Long-lived access token") },
+                placeholder = {
+                    Text(
+                        if (homeAssistantConfig.accessToken.isBlank()) {
+                            "Required"
+                        } else {
+                            "Saved securely"
+                        },
+                    )
+                },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+            )
+        }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = { onScanHomeAssistantToken(homeAssistantUrl) },
+                    enabled = homeAssistantUrl.isNotBlank() &&
+                        continueOnState !is ContinueOnState.LoadingPlayers,
+                ) {
+                    Text("Scan token QR")
+                }
+                TextButton(
+                    onClick = {
+                        onConnectHomeAssistant(homeAssistantUrl, homeAssistantToken)
+                    },
+                    enabled = homeAssistantUrl.isNotBlank() &&
+                        (homeAssistantToken.isNotBlank() ||
+                            (
+                                homeAssistantConfig.accessToken.isNotBlank() &&
+                                    homeAssistantUrl.trim().trimEnd('/') ==
+                                    homeAssistantConfig.serverUrl
+                                )) &&
+                        continueOnState !is ContinueOnState.LoadingPlayers,
+                ) {
+                    Text(
+                        if (continueOnState is ContinueOnState.LoadingPlayers) {
+                            "Connecting…"
+                        } else {
+                            "Connect"
+                        },
+                    )
+                }
+            }
+        }
+        item {
+            when (continueOnState) {
+                is ContinueOnState.Ready -> Text(
+                    "Found ${continueOnState.players.size} " +
+                        pluralize(continueOnState.players.size, "Sonos player"),
+                )
+                is ContinueOnState.Error -> Text(
+                    continueOnState.message,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                else -> if (homeAssistantConfig.isConfigured) {
+                    Text("Home Assistant configured")
+                }
+            }
             HorizontalDivider()
         }
         item {
@@ -1694,7 +2072,7 @@ private fun LibraryTitle(title: String, subtitle: String) {
 }
 
 @Composable
-private fun BackHeader(title: String, parent: String, onBack: () -> Unit) {
+internal fun BackHeader(title: String, parent: String, onBack: () -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
         TextButton(onClick = onBack, modifier = Modifier.padding(horizontal = 12.dp)) {
             Text("‹ $parent")
@@ -1894,7 +2272,10 @@ private fun TouchNowPlayingScreen(
     nowPlaying: NowPlaying?,
     onBack: () -> Unit,
     onTogglePlayback: () -> Unit,
+    sonosSessionActive: Boolean,
+    onAdjustVolume: (Int) -> Unit,
     onOpenQueue: () -> Unit,
+    onOpenContinueOn: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -1946,7 +2327,17 @@ private fun TouchNowPlayingScreen(
             Button(onClick = onTogglePlayback) {
                 Text(if (nowPlaying.isPlaying) "Pause" else "Play")
             }
+            if (sonosSessionActive) {
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onAdjustVolume(-1) }) { Text("Volume −") }
+                    Button(onClick = { onAdjustVolume(1) }) { Text("Volume +") }
+                }
+            }
             TextButton(onClick = onOpenQueue) { Text("View Queue") }
+            if (nowPlaying.source == PlaybackSource.JELLYFIN) {
+                TextButton(onClick = onOpenContinueOn) { Text("Continue on…") }
+            }
         }
     }
 }

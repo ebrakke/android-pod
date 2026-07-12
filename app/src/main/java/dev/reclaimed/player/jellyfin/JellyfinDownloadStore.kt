@@ -34,6 +34,20 @@ class JellyfinDownloadStore(private val context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val downloadManager = context.getSystemService(DownloadManager::class.java)
 
+    init {
+        context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+        preferences.all.values.forEach { serialized ->
+            (serialized as? String)?.let { json ->
+                runCatching { JSONObject(json).optString("filePath") }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(::File)
+                    ?.parentFile
+                    ?.mkdirs()
+            }
+        }
+    }
+
     fun enqueueAlbum(config: JellyfinConfig, album: JellyfinAlbum) {
         val client = JellyfinClient(config)
         album.tracks.forEach { track ->

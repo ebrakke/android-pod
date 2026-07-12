@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect Reclaimed Player to Jellyfin",
+        "description": "Use a Jellyfin URL reachable by your Sonos speakers.",
+        "data": {
+          "jellyfin_url": "Jellyfin URL",
+          "jellyfin_token": "Jellyfin access token or API key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Jellyfin",
+      "invalid_auth": "Jellyfin rejected the token"
+    },
+    "abort": {
+      "already_configured": "This Jellyfin server is already configured",
+      "single_instance_allowed": "Only one Reclaimed Player integration can be configured"
+    }
+  }
+}

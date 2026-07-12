@@ -565,6 +565,7 @@ private fun classicItems(
         add(ClassicMenuItem("Switch to Touch Mode", onSelect = onSwitchToTouch))
     }
     LibraryScreen.NowPlaying -> emptyList()
+    LibraryScreen.ContinueOn -> emptyList()
     LibraryScreen.Queue -> if (playbackQueue.items.isEmpty()) {
         listOf(statusItem("The queue is empty"))
     } else {
@@ -729,6 +730,7 @@ private fun statusItem(message: String) = ClassicMenuItem(message, onSelect = {}
 private fun LibraryScreen.classicKey(): String = when (this) {
     LibraryScreen.Home -> "home"
     LibraryScreen.NowPlaying -> "now-playing"
+    LibraryScreen.ContinueOn -> "continue-on"
     LibraryScreen.Queue -> "queue"
     LibraryScreen.Artists -> "local-artists"
     LibraryScreen.ManageSources -> "settings"
@@ -743,6 +745,7 @@ private fun LibraryScreen.classicKey(): String = when (this) {
 private fun LibraryScreen.classicTitle(config: JellyfinConfig): String = when (this) {
     LibraryScreen.Home -> "Reclaimed"
     LibraryScreen.NowPlaying -> "Now Playing"
+    LibraryScreen.ContinueOn -> "Continue on…"
     LibraryScreen.Queue -> "Queue"
     LibraryScreen.Artists -> "On Device"
     LibraryScreen.ManageSources -> "Device"

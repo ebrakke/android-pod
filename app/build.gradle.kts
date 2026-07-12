@@ -18,6 +18,22 @@ android {
     buildFeatures {
         compose = true
     }
+
+    providers.gradleProperty("reclaimedSigningFile").orNull?.let { signingFile ->
+        signingConfigs.create("reclaimedDebug") {
+            storeFile = file(signingFile)
+            storePassword = providers.gradleProperty("reclaimedSigningPassword")
+                .orElse("android")
+                .get()
+            keyAlias = providers.gradleProperty("reclaimedSigningAlias")
+                .orElse("reclaimeddebug")
+                .get()
+            keyPassword = providers.gradleProperty("reclaimedSigningPassword")
+                .orElse("android")
+                .get()
+        }
+        buildTypes.getByName("debug").signingConfig = signingConfigs.getByName("reclaimedDebug")
+    }
 }
 
 dependencies {
@@ -32,6 +48,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.10.0")
     implementation("androidx.media3:media3-session:1.10.0")
     implementation("androidx.work:work-runtime:2.11.1")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation(kotlin("test-junit"))
 }

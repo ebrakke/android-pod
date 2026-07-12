@@ -58,6 +58,8 @@ Run `just` or `mise exec -- just` to list all recipes.
 | `check` | Run build, lint, and unit tests together. |
 | `devices` | List connected Android devices. |
 | `install` | Install a debug APK while preserving app data. |
+| `signing-create` | Create the first stable device signing key; back it up and never replace it. |
+| `ha-deploy` | Upload the custom integration over SSH, validate configuration, restart HA Core, and wait. |
 | `emulator-setup` | Install the optional API 36 emulator image and create the project Pixel 6 AVD. |
 | `emulator-start` | Start the project emulator in a visible window. |
 | `emulator-start-headless` | Start the project emulator without a window for automated work. |
@@ -119,6 +121,23 @@ Bluetooth/headset controls, real audio focus, lock-screen and screen-off playbac
 reboots, and device storage/battery behavior still require the physical phone. Physical-device
 commands remain separate under `just devices` and `just install`.
 
+### Stable device signing
+
+Physical-device upgrades use a stable debug signing key at
+`~/.config/reclaimed-player/reclaimed-player-debug.keystore`. Create it exactly once with:
+
+```sh
+mise exec -- just signing-create
+```
+
+Back up that file securely. On another development computer, copy the existing key to the same
+path before running `just install`; do not generate a replacement. The key is intentionally stored
+outside the repository and uses the conventional debug-keystore password because its purpose is
+upgrade identity, not release distribution. Set `RECLAIMED_PLAYER_KEYSTORE` to use another path.
+
+Normal builds and emulator checks continue to use the machine's standard Android debug key. The
+`install` recipe supplies the stable key only for physical-device installation.
+
 The initial proof of concept is both a normal launchable activity and an Android Home candidate. This lets us test the shell without removing the existing launcher.
 
 ## Device workflow
@@ -158,3 +177,45 @@ mise exec -- sh -c \
 - Downloads authenticated Jellyfin album artwork with each album and prefers the local cover offline.
 - Provides a shared Downloads manager with offline album browsing, status, disk usage,
   playback, and removal controls in both Classic and Touch modes.
+- Continues an active Jellyfin queue and playback position on Sonos through a purpose-built
+  Home Assistant integration.
+
+## Home Assistant and Sonos handoff
+
+The initial Touch-mode handoff moves an all-Jellyfin queue to a Sonos player. Home Assistant must
+already have the official Sonos integration configured. Install the repository's custom component
+by copying:
+
+```text
+home-assistant/custom_components/reclaimed_player/
+```
+
+to:
+
+```text
+/config/custom_components/reclaimed_player/
+```
+
+Restart Home Assistant, add the **Reclaimed Player** integration, and enter a Jellyfin URL and
+access token. The Jellyfin URL only needs to be reachable from Home Assistant; the integration
+proxies authenticated range requests through opaque URLs that expire after 24 hours. Sonos must be
+able to reach either Home Assistant's configured internal URL (preferred) or external URL.
+
+In Reclaimed Player Touch mode, open **Manage Sources**, enter the Home Assistant URL and a
+long-lived Home Assistant access token, then choose **Connect and find Sonos speakers**. The token
+is stored in Android Keystore-backed encrypted app storage. While a Jellyfin queue is active, open
+Now Playing and choose **Continue on…**.
+
+After a successful handoff the phone pauses and Sonos owns playback. The Continue on screen,
+Touch Now Playing button, persistent bottom player, and Classic Play/Pause control then target the
+active Sonos group without restarting local playback. Reverse handoff, remote track/position
+polling, dock/NFC triggers, grouping controls, shuffle-order transfer, and durable stream grants
+across a Home Assistant restart remain future work. While a Sonos session is active, Touch volume
+buttons, Android hardware volume keys, and Classic Now Playing wheel rotation adjust Sonos volume.
+
+For development, authorize `~/.ssh/reclaimed_player_ha.pub` in HA's SSH app once, then run
+`mise exec -- just ha-deploy`. The command stages the component under `/config`, compiles it,
+runs `ha core check`, rolls back on validation failure, restarts Core, and waits for the HTTP API.
+The checked device defaults to HA's LAN SSH endpoint at `192.168.68.60:22`; override
+`HA_SSH_HOST`, `HA_SSH_USER`, `HA_SSH_PORT`, `HA_SSH_IDENTITY`, or `HA_SSH_KNOWN_HOSTS` when
+needed.

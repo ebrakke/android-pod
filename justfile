@@ -72,7 +72,33 @@ devices:
 
 # Install the debug APK on the connected device, preserving app data.
 install:
-    . {{ android_env }} && {{ gradle }} installDebug
+    #!/usr/bin/env sh
+    set -eu
+    . {{ android_env }}
+    key_path="${RECLAIMED_PLAYER_KEYSTORE:-$HOME/.config/reclaimed-player/reclaimed-player-debug.keystore}"
+    if [ ! -f "$key_path" ]; then
+        printf 'Missing stable signing key: %s\n' "$key_path" >&2
+        printf 'Copy the existing key from another development computer.\n' >&2
+        printf 'For the first key only, run `just signing-create`.\n' >&2
+        exit 1
+    fi
+    physical_devices="$(adb devices | awk '$2 == "device" && $1 !~ /^emulator-/ { print $1 }')"
+    device_count="$(printf '%s\n' "$physical_devices" | awk 'NF { count++ } END { print count + 0 }')"
+    if [ "$device_count" -ne 1 ]; then
+        printf 'Expected exactly one connected physical Android device; found %s.\n' "$device_count" >&2
+        exit 1
+    fi
+    serial="$(printf '%s\n' "$physical_devices" | awk 'NF { print; exit }')"
+    {{ gradle }} assembleDebug -PreclaimedSigningFile="$key_path"
+    adb -s "$serial" install -r app/build/outputs/apk/debug/app-debug.apk
+
+# Create the first stable device signing key. Never use this to replace a lost key.
+signing-create:
+    . {{ android_env }} && scripts/create-debug-keystore.sh
+
+# Upload the custom integration, validate HA configuration, restart Core, and wait for readiness.
+ha-deploy:
+    scripts/deploy-home-assistant.sh
 
 # Install the optional emulator package/image and create the project Pixel 6 AVD.
 emulator-setup:
