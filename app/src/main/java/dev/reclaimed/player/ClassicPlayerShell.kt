@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -64,6 +65,13 @@ internal data class CommonShellActions(
     val onOpenArtist: (LocalArtist) -> Unit,
     val onOpenAlbum: (LocalAlbum) -> Unit,
     val onOpenNowPlaying: () -> Unit,
+    val onOpenQueue: () -> Unit,
+)
+
+private data class ClassicQueueActions(
+    val label: String,
+    val onPlayNext: () -> Unit,
+    val onAddToQueue: () -> Unit,
 )
 
 private data class ClassicMenuItem(
@@ -71,6 +79,7 @@ private data class ClassicMenuItem(
     val detail: String = "",
     val onSelect: () -> Unit,
     val onPlay: () -> Unit = onSelect,
+    val queueActions: ClassicQueueActions? = null,
 )
 
 @Composable
@@ -79,6 +88,7 @@ internal fun ClassicPlayerShell(
     artists: List<LocalArtist>,
     libraryScreen: LibraryScreen,
     nowPlaying: NowPlaying?,
+    playbackQueue: PlaybackQueue,
     jellyfinConfig: JellyfinConfig,
     jellyfinArtists: List<JellyfinArtist>,
     jellyfinLibraryState: JellyfinLibraryState,
@@ -91,6 +101,11 @@ internal fun ClassicPlayerShell(
     onPlayTrack: (LocalAlbum, Int) -> Unit,
     onPlayJellyfinAlbum: (JellyfinAlbum) -> Unit,
     onPlayJellyfinTrack: (JellyfinAlbum, Int) -> Unit,
+    onPlayNextLocal: (LocalAlbum, Int?) -> Unit,
+    onAddLocalToQueue: (LocalAlbum, Int?) -> Unit,
+    onPlayNextJellyfin: (JellyfinAlbum, Int?) -> Unit,
+    onAddJellyfinToQueue: (JellyfinAlbum, Int?) -> Unit,
+    onPlayQueueItem: (Int) -> Unit,
     onDownloadJellyfinAlbum: (JellyfinAlbum) -> Unit,
     onRemoveJellyfinAlbumDownloads: (JellyfinAlbum) -> Unit,
     jellyfinDownloadSummary: (JellyfinAlbum) -> AlbumDownloadSummary,
@@ -104,11 +119,13 @@ internal fun ClassicPlayerShell(
     onOpenBluetoothSettings: () -> Unit,
     onOpenSystemSettings: () -> Unit,
 ) {
-    BackHandler(enabled = libraryScreen !is LibraryScreen.Home, onBack = onBack)
-
     val screenKey = libraryScreen.classicKey()
-    var selectedIndex by remember(screenKey) { mutableIntStateOf(0) }
-    val menuItems = when (libraryState) {
+    var queueActions by remember { mutableStateOf<ClassicQueueActions?>(null) }
+    BackHandler(enabled = libraryScreen !is LibraryScreen.Home || queueActions != null) {
+        if (queueActions != null) queueActions = null else onBack()
+    }
+    LaunchedEffect(screenKey) { queueActions = null }
+    val baseMenuItems = when (libraryState) {
         LibraryState.Loading -> listOf(statusItem("Scanning this device…"))
         LibraryState.PermissionRequired,
         LibraryState.PermissionDenied,
@@ -118,6 +135,7 @@ internal fun ClassicPlayerShell(
         LibraryState.Ready -> classicItems(
             screen = libraryScreen,
             nowPlaying = nowPlaying,
+            playbackQueue = playbackQueue,
             artists = artists,
             jellyfinConfig = jellyfinConfig,
             jellyfinArtists = jellyfinArtists,
@@ -129,6 +147,11 @@ internal fun ClassicPlayerShell(
             onPlayTrack = onPlayTrack,
             onPlayJellyfinAlbum = onPlayJellyfinAlbum,
             onPlayJellyfinTrack = onPlayJellyfinTrack,
+            onPlayNextLocal = onPlayNextLocal,
+            onAddLocalToQueue = onAddLocalToQueue,
+            onPlayNextJellyfin = onPlayNextJellyfin,
+            onAddJellyfinToQueue = onAddJellyfinToQueue,
+            onPlayQueueItem = onPlayQueueItem,
             onDownloadJellyfinAlbum = onDownloadJellyfinAlbum,
             onRemoveJellyfinAlbumDownloads = onRemoveJellyfinAlbumDownloads,
             jellyfinDownloadSummary = jellyfinDownloadSummary,
@@ -139,12 +162,26 @@ internal fun ClassicPlayerShell(
             onOpenSystemSettings = onOpenSystemSettings,
         )
     }
+    val menuItems = queueActions?.let { actions ->
+        listOf(
+            ClassicMenuItem("Play Next", onSelect = {
+                actions.onPlayNext()
+                queueActions = null
+            }),
+            ClassicMenuItem("Add to Queue", onSelect = {
+                actions.onAddToQueue()
+                queueActions = null
+            }),
+        )
+    } ?: baseMenuItems
+    val displayKey = queueActions?.let { "$screenKey:queue-actions:${it.label}" } ?: screenKey
+    var selectedIndex by remember(displayKey) { mutableIntStateOf(0) }
     LaunchedEffect(menuItems.size) {
         selectedIndex = if (menuItems.isEmpty()) 0 else selectedIndex.coerceIn(menuItems.indices)
     }
 
     val selectedItem = menuItems.getOrNull(selectedIndex)
-    val isNowPlaying = libraryScreen is LibraryScreen.NowPlaying
+    val isNowPlaying = queueActions == null && libraryScreen is LibraryScreen.NowPlaying
     Surface(color = CLASSIC_BODY, modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             Surface(
@@ -159,7 +196,7 @@ internal fun ClassicPlayerShell(
                     ClassicNowPlaying(nowPlaying)
                 } else {
                     ClassicMenuDisplay(
-                        title = libraryScreen.classicTitle(jellyfinConfig),
+                        title = queueActions?.label ?: libraryScreen.classicTitle(jellyfinConfig),
                         items = menuItems,
                         selectedIndex = selectedIndex,
                         onActivate = { index ->
@@ -191,7 +228,12 @@ internal fun ClassicPlayerShell(
                     onSelect = {
                         if (isNowPlaying) onTogglePlayback() else selectedItem?.onSelect?.invoke()
                     },
-                    onMenu = onBack,
+                    onSelectLongPress = {
+                        if (!isNowPlaying) selectedItem?.queueActions?.let { queueActions = it }
+                    },
+                    onMenu = {
+                        if (queueActions != null) queueActions = null else onBack()
+                    },
                     onMenuLongPress = onSwitchToTouch,
                     onPrevious = onPrevious,
                     onNext = onNext,
@@ -314,6 +356,13 @@ private fun ClassicNowPlaying(nowPlaying: NowPlaying?) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        if (nowPlaying.queueSize > 0) {
+            Text(
+                "${nowPlaying.queueIndex + 1} of ${nowPlaying.queueSize}",
+                style = MaterialTheme.typography.labelSmall,
+                color = CLASSIC_INK.copy(alpha = 0.65f),
+            )
+        }
         Spacer(Modifier.height(12.dp))
         LinearProgressIndicator(
             progress = {
@@ -344,6 +393,7 @@ private fun ClassicNowPlaying(nowPlaying: NowPlaying?) {
 private fun ClassicWheel(
     onStep: (Int) -> Unit,
     onSelect: () -> Unit,
+    onSelectLongPress: () -> Unit,
     onMenu: () -> Unit,
     onMenuLongPress: () -> Unit,
     onPrevious: () -> Unit,
@@ -408,7 +458,10 @@ private fun ClassicWheel(
             modifier = Modifier
                 .align(Alignment.Center)
                 .size(112.dp)
-                .clickable(onClick = onSelect),
+                .combinedClickable(
+                    onClick = onSelect,
+                    onLongClick = onSelectLongPress,
+                ),
             shape = CircleShape,
             color = CLASSIC_BODY,
             shadowElevation = 2.dp,
@@ -445,6 +498,7 @@ private fun androidx.compose.foundation.layout.BoxScope.WheelButton(
 private fun classicItems(
     screen: LibraryScreen,
     nowPlaying: NowPlaying?,
+    playbackQueue: PlaybackQueue,
     artists: List<LocalArtist>,
     jellyfinConfig: JellyfinConfig,
     jellyfinArtists: List<JellyfinArtist>,
@@ -456,6 +510,11 @@ private fun classicItems(
     onPlayTrack: (LocalAlbum, Int) -> Unit,
     onPlayJellyfinAlbum: (JellyfinAlbum) -> Unit,
     onPlayJellyfinTrack: (JellyfinAlbum, Int) -> Unit,
+    onPlayNextLocal: (LocalAlbum, Int?) -> Unit,
+    onAddLocalToQueue: (LocalAlbum, Int?) -> Unit,
+    onPlayNextJellyfin: (JellyfinAlbum, Int?) -> Unit,
+    onAddJellyfinToQueue: (JellyfinAlbum, Int?) -> Unit,
+    onPlayQueueItem: (Int) -> Unit,
     onDownloadJellyfinAlbum: (JellyfinAlbum) -> Unit,
     onRemoveJellyfinAlbumDownloads: (JellyfinAlbum) -> Unit,
     jellyfinDownloadSummary: (JellyfinAlbum) -> AlbumDownloadSummary,
@@ -468,6 +527,9 @@ private fun classicItems(
     LibraryScreen.Home -> buildList {
         if (nowPlaying != null) {
             add(ClassicMenuItem("Now Playing", nowPlaying.artist, actions.onOpenNowPlaying))
+        }
+        if (playbackQueue.items.isNotEmpty()) {
+            add(ClassicMenuItem("Queue", playbackQueue.positionLabel(), actions.onOpenQueue))
         }
         add(
             ClassicMenuItem(
@@ -503,6 +565,17 @@ private fun classicItems(
         add(ClassicMenuItem("Switch to Touch Mode", onSelect = onSwitchToTouch))
     }
     LibraryScreen.NowPlaying -> emptyList()
+    LibraryScreen.Queue -> if (playbackQueue.items.isEmpty()) {
+        listOf(statusItem("The queue is empty"))
+    } else {
+        playbackQueue.items.mapIndexed { index, item ->
+            ClassicMenuItem(
+                label = if (index == playbackQueue.currentIndex) "▶ ${item.title}" else item.title,
+                detail = item.artist,
+                onSelect = { onPlayQueueItem(index) },
+            )
+        }
+    }
     LibraryScreen.Downloads -> if (managedDownloads.isEmpty()) {
         listOf(statusItem("No music saved offline"))
     } else {
@@ -512,6 +585,11 @@ private fun classicItems(
                 "${download.album.artist} · ${formatBytes(download.bytes)}",
                 onSelect = { actions.onOpenJellyfinAlbum(download.album) },
                 onPlay = { onPlayJellyfinAlbum(download.album) },
+                queueActions = ClassicQueueActions(
+                    label = download.album.title,
+                    onPlayNext = { onPlayNextJellyfin(download.album, null) },
+                    onAddToQueue = { onAddJellyfinToQueue(download.album, null) },
+                ),
             )
         }
     }
@@ -528,16 +606,37 @@ private fun classicItems(
             "${album.tracks.size} tracks",
             onSelect = { actions.onOpenAlbum(album) },
             onPlay = { onPlayAlbum(album) },
+            queueActions = ClassicQueueActions(
+                label = album.title,
+                onPlayNext = { onPlayNextLocal(album, null) },
+                onAddToQueue = { onAddLocalToQueue(album, null) },
+            ),
         )
     }
     is LibraryScreen.Album -> buildList {
-        add(ClassicMenuItem("Play Album", screen.album.artist, { onPlayAlbum(screen.album) }))
+        add(
+            ClassicMenuItem(
+                "Play Album",
+                screen.album.artist,
+                onSelect = { onPlayAlbum(screen.album) },
+                queueActions = ClassicQueueActions(
+                    label = screen.album.title,
+                    onPlayNext = { onPlayNextLocal(screen.album, null) },
+                    onAddToQueue = { onAddLocalToQueue(screen.album, null) },
+                ),
+            ),
+        )
         screen.album.tracks.forEachIndexed { index, track ->
             add(
                 ClassicMenuItem(
                     track.title,
                     track.trackNumber?.let { "Track $it" }.orEmpty(),
                     onSelect = { onPlayTrack(screen.album, index) },
+                    queueActions = ClassicQueueActions(
+                        label = track.title,
+                        onPlayNext = { onPlayNextLocal(screen.album, index) },
+                        onAddToQueue = { onAddLocalToQueue(screen.album, index) },
+                    ),
                 ),
             )
         }
@@ -561,6 +660,11 @@ private fun classicItems(
             "${album.tracks.size} tracks",
             onSelect = { actions.onOpenJellyfinAlbum(album) },
             onPlay = { onPlayJellyfinAlbum(album) },
+            queueActions = ClassicQueueActions(
+                label = album.title,
+                onPlayNext = { onPlayNextJellyfin(album, null) },
+                onAddToQueue = { onAddJellyfinToQueue(album, null) },
+            ),
         )
     }
     is LibraryScreen.JellyfinAlbumDetail -> buildList {
@@ -570,6 +674,11 @@ private fun classicItems(
                 if (summary.isComplete) "Play Downloaded Album" else "Play Album",
                 screen.album.artist,
                 onSelect = { onPlayJellyfinAlbum(screen.album) },
+                queueActions = ClassicQueueActions(
+                    label = screen.album.title,
+                    onPlayNext = { onPlayNextJellyfin(screen.album, null) },
+                    onAddToQueue = { onAddJellyfinToQueue(screen.album, null) },
+                ),
             ),
         )
         add(
@@ -597,6 +706,11 @@ private fun classicItems(
                     track.title,
                     track.trackNumber?.let { "Track $it" }.orEmpty(),
                     onSelect = { onPlayJellyfinTrack(screen.album, index) },
+                    queueActions = ClassicQueueActions(
+                        label = track.title,
+                        onPlayNext = { onPlayNextJellyfin(screen.album, index) },
+                        onAddToQueue = { onAddJellyfinToQueue(screen.album, index) },
+                    ),
                 ),
             )
         }
@@ -615,6 +729,7 @@ private fun statusItem(message: String) = ClassicMenuItem(message, onSelect = {}
 private fun LibraryScreen.classicKey(): String = when (this) {
     LibraryScreen.Home -> "home"
     LibraryScreen.NowPlaying -> "now-playing"
+    LibraryScreen.Queue -> "queue"
     LibraryScreen.Artists -> "local-artists"
     LibraryScreen.ManageSources -> "settings"
     LibraryScreen.Downloads -> "downloads"
@@ -628,6 +743,7 @@ private fun LibraryScreen.classicKey(): String = when (this) {
 private fun LibraryScreen.classicTitle(config: JellyfinConfig): String = when (this) {
     LibraryScreen.Home -> "Reclaimed"
     LibraryScreen.NowPlaying -> "Now Playing"
+    LibraryScreen.Queue -> "Queue"
     LibraryScreen.Artists -> "On Device"
     LibraryScreen.ManageSources -> "Device"
     LibraryScreen.Downloads -> "Downloads"

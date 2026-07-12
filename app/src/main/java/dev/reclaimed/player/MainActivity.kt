@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -106,6 +107,7 @@ class MainActivity : ComponentActivity() {
     private var screenBeforeNowPlaying: LibraryScreen = LibraryScreen.Home
     private var screenBeforeJellyfinAlbum: LibraryScreen = LibraryScreen.JellyfinArtists
     private var nowPlaying by mutableStateOf<NowPlaying?>(null)
+    private var playbackQueue by mutableStateOf(PlaybackQueue())
     private var interfaceMode by mutableStateOf(InterfaceMode.Classic)
     private var jellyfinConfig by mutableStateOf(JellyfinConfig())
     private var jellyfinLibraries by mutableStateOf<List<JellyfinLibrary>>(emptyList())
@@ -136,6 +138,7 @@ class MainActivity : ComponentActivity() {
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             updateNowPlaying(player)
+            updatePlaybackQueue(player)
         }
     }
 
@@ -183,6 +186,7 @@ class MainActivity : ComponentActivity() {
                     onOpenArtist = { libraryScreen = LibraryScreen.Albums(it) },
                     onOpenAlbum = { libraryScreen = LibraryScreen.Album(it) },
                     onOpenNowPlaying = openNowPlaying,
+                    onOpenQueue = { libraryScreen = LibraryScreen.Queue },
                 )
                 val managedDownloads = remember(jellyfinArtists, downloadRevision) {
                     jellyfinDownloadStore.managedAlbums(
@@ -198,6 +202,7 @@ class MainActivity : ComponentActivity() {
                         artists = artists,
                         libraryScreen = libraryScreen,
                         nowPlaying = nowPlaying,
+                        playbackQueue = playbackQueue,
                         jellyfinConfig = jellyfinConfig,
                         jellyfinArtists = jellyfinArtists,
                         jellyfinLibraryState = jellyfinLibraryState,
@@ -210,6 +215,11 @@ class MainActivity : ComponentActivity() {
                         onPlayTrack = ::play,
                         onPlayJellyfinAlbum = { album -> play(album, 0) },
                         onPlayJellyfinTrack = ::play,
+                        onPlayNextLocal = ::playNext,
+                        onAddLocalToQueue = ::addToQueue,
+                        onPlayNextJellyfin = ::playNext,
+                        onAddJellyfinToQueue = ::addToQueue,
+                        onPlayQueueItem = ::playQueueItem,
                         onDownloadJellyfinAlbum = ::download,
                         onRemoveJellyfinAlbumDownloads = ::removeDownloads,
                         jellyfinDownloadSummary = jellyfinDownloadStore::summary,
@@ -234,6 +244,7 @@ class MainActivity : ComponentActivity() {
                     artists = artists,
                     libraryScreen = libraryScreen,
                     nowPlaying = nowPlaying,
+                    playbackQueue = playbackQueue,
                     jellyfinConfig = jellyfinConfig,
                     jellyfinLibraries = jellyfinLibraries,
                     jellyfinConnectionState = jellyfinConnectionState,
@@ -252,11 +263,18 @@ class MainActivity : ComponentActivity() {
                     onOpenArtist = commonShell.onOpenArtist,
                     onOpenAlbum = commonShell.onOpenAlbum,
                     onOpenNowPlaying = commonShell.onOpenNowPlaying,
+                    onOpenQueue = commonShell.onOpenQueue,
                     onBack = ::navigateBack,
                     onPlayAlbum = { album -> play(album, 0) },
                     onPlayTrack = ::play,
                     onPlayJellyfinAlbum = { album -> play(album, 0) },
                     onPlayJellyfinTrack = ::play,
+                    onPlayQueueItem = ::playQueueItem,
+                    onMoveQueueItem = ::moveQueueItem,
+                    onRemoveQueueItem = ::removeQueueItem,
+                    onClearQueue = ::clearQueue,
+                    onToggleShuffle = ::toggleShuffle,
+                    onCycleRepeatMode = ::cycleRepeatMode,
                     onDownloadJellyfinAlbum = ::download,
                     onRemoveJellyfinAlbumDownloads = ::removeDownloads,
                     jellyfinDownloadSummary = jellyfinDownloadStore::summary,
@@ -294,6 +312,7 @@ class MainActivity : ComponentActivity() {
                             controller = connectedController.also {
                                 it.addListener(playerListener)
                                 updateNowPlaying(it)
+                                updatePlaybackQueue(it)
                                 progressHandler.removeCallbacks(progressUpdater)
                                 progressHandler.post(progressUpdater)
                             }
@@ -326,6 +345,7 @@ class MainActivity : ComponentActivity() {
         libraryScreen = when (val current = libraryScreen) {
             LibraryScreen.Home -> current
             LibraryScreen.NowPlaying -> screenBeforeNowPlaying
+            LibraryScreen.Queue -> LibraryScreen.Home
             LibraryScreen.Artists -> LibraryScreen.Home
             LibraryScreen.ManageSources -> LibraryScreen.Home
             LibraryScreen.Downloads -> LibraryScreen.Home
@@ -516,40 +536,48 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun play(album: LocalAlbum, startIndex: Int) {
-        val mediaItems = album.tracks.map { track ->
-            val extras = Bundle().apply {
-                putString(PlaybackItemMetadata.SOURCE, PlaybackSource.LOCAL.name)
-                putString(PlaybackItemMetadata.SOURCE_ID, track.id.toString())
-                putString(PlaybackItemMetadata.ALBUM_ID, track.albumId.toString())
-            }
-            MediaItem.Builder()
-                .setMediaId("local:${track.id}")
-                .setUri(track.uri)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(track.title)
-                        .setArtist(track.artist)
-                        .setAlbumTitle(track.album)
-                        .setArtworkUri(album.artworkUri)
-                        .setTrackNumber(track.trackNumber)
-                        .setDurationMs(track.durationMs)
-                        .setExtras(extras)
-                        .build(),
-                )
-                .build()
-        }
         controller?.apply {
-            setMediaItems(mediaItems, startIndex, 0L)
+            setMediaItems(localMediaItems(album), startIndex, 0L)
             prepare()
             play()
         }
     }
 
+    private fun localMediaItems(album: LocalAlbum): List<MediaItem> = album.tracks.map { track ->
+        val extras = Bundle().apply {
+            putString(PlaybackItemMetadata.SOURCE, PlaybackSource.LOCAL.name)
+            putString(PlaybackItemMetadata.SOURCE_ID, track.id.toString())
+            putString(PlaybackItemMetadata.ALBUM_ID, track.albumId.toString())
+        }
+        MediaItem.Builder()
+            .setMediaId("local:${track.id}")
+            .setUri(track.uri)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(track.title)
+                    .setArtist(track.artist)
+                    .setAlbumTitle(track.album)
+                    .setArtworkUri(album.artworkUri)
+                    .setTrackNumber(track.trackNumber)
+                    .setDurationMs(track.durationMs)
+                    .setExtras(extras)
+                    .build(),
+            )
+            .build()
+    }
+
     private fun play(album: JellyfinAlbum, startIndex: Int) {
+        controller?.apply {
+            setMediaItems(jellyfinMediaItems(album), startIndex, 0L)
+            prepare()
+            play()
+        }
+    }
+    private fun jellyfinMediaItems(album: JellyfinAlbum): List<MediaItem> {
         val client = JellyfinClient(jellyfinConfig)
         val artworkUri = jellyfinDownloadStore.localArtworkUri(album.id)
             ?: Uri.parse(client.imageUrl(album.id))
-        val mediaItems = album.tracks.map { track ->
+        return album.tracks.map { track ->
             val extras = Bundle().apply {
                 putString(PlaybackItemMetadata.SOURCE, PlaybackSource.JELLYFIN.name)
                 putString(PlaybackItemMetadata.SOURCE_ID, track.id)
@@ -574,10 +602,98 @@ class MainActivity : ComponentActivity() {
                 )
                 .build()
         }
+    }
+
+    private fun playNext(album: LocalAlbum, trackIndex: Int?) {
+        insertNext(localMediaItems(album).selectedTrack(trackIndex))
+    }
+
+    private fun addToQueue(album: LocalAlbum, trackIndex: Int?) {
+        appendToQueue(localMediaItems(album).selectedTrack(trackIndex))
+    }
+
+    private fun playNext(album: JellyfinAlbum, trackIndex: Int?) {
+        insertNext(jellyfinMediaItems(album).selectedTrack(trackIndex))
+    }
+
+    private fun addToQueue(album: JellyfinAlbum, trackIndex: Int?) {
+        appendToQueue(jellyfinMediaItems(album).selectedTrack(trackIndex))
+    }
+
+    private fun List<MediaItem>.selectedTrack(trackIndex: Int?): List<MediaItem> =
+        trackIndex?.let { listOf(get(it)) } ?: this
+
+    private fun insertNext(items: List<MediaItem>) {
+        if (items.isEmpty()) return
         controller?.apply {
-            setMediaItems(mediaItems, startIndex, 0L)
-            prepare()
+            if (mediaItemCount == 0) {
+                setMediaItems(items)
+                prepare()
+                play()
+            } else {
+                addMediaItems((currentMediaItemIndex + 1).coerceAtMost(mediaItemCount), items)
+            }
+        }
+    }
+
+    private fun appendToQueue(items: List<MediaItem>) {
+        if (items.isEmpty()) return
+        controller?.apply {
+            val wasEmpty = mediaItemCount == 0
+            addMediaItems(items)
+            if (wasEmpty) prepare()
+        }
+    }
+
+    private fun playQueueItem(index: Int) {
+        controller?.apply {
+            if (index !in 0 until mediaItemCount) return
+            seekToDefaultPosition(index)
             play()
+        }
+    }
+
+    private fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+        controller?.apply {
+            if (fromIndex !in 0 until mediaItemCount || toIndex !in 0 until mediaItemCount) return
+            moveMediaItem(fromIndex, toIndex)
+        }
+    }
+
+    private fun removeQueueItem(index: Int) {
+        controller?.apply {
+            if (index !in 0 until mediaItemCount || index == currentMediaItemIndex) return
+            removeMediaItem(index)
+        }
+    }
+
+    private fun clearQueue() {
+        controller?.apply {
+            val currentIndex = currentMediaItemIndex
+            if (currentIndex !in 0 until mediaItemCount) {
+                clearMediaItems()
+                return
+            }
+            if (currentIndex + 1 < mediaItemCount) {
+                removeMediaItems(currentIndex + 1, mediaItemCount)
+            }
+            if (currentIndex > 0) {
+                removeMediaItems(0, currentIndex)
+            }
+        }
+    }
+
+    private fun toggleShuffle() {
+        controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled }
+    }
+
+    private fun cycleRepeatMode() {
+        controller?.let { player ->
+            player.repeatMode = when (player.repeatMode) {
+                Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                else -> Player.REPEAT_MODE_OFF
+            }
         }
     }
 
@@ -645,8 +761,28 @@ class MainActivity : ComponentActivity() {
                 isPlaying = player.isPlaying,
                 positionMs = player.currentPosition.coerceAtLeast(0L),
                 durationMs = player.duration.takeIf { it > 0L } ?: 0L,
+                queueIndex = player.currentMediaItemIndex,
+                queueSize = player.mediaItemCount,
             )
         }
+    }
+
+    private fun updatePlaybackQueue(player: Player) {
+        playbackQueue = PlaybackQueue(
+            items = (0 until player.mediaItemCount).map { index ->
+                val mediaItem = player.getMediaItemAt(index)
+                val metadata = mediaItem.mediaMetadata
+                PlaybackQueueItem(
+                    mediaId = mediaItem.mediaId,
+                    title = metadata.title?.toString().orEmpty(),
+                    artist = metadata.artist?.toString().orEmpty(),
+                    album = metadata.albumTitle?.toString().orEmpty(),
+                )
+            },
+            currentIndex = player.currentMediaItemIndex,
+            shuffleEnabled = player.shuffleModeEnabled,
+            repeatMode = player.repeatMode,
+        )
     }
 
     private companion object {
@@ -671,6 +807,7 @@ internal sealed interface LibraryState {
 internal sealed interface LibraryScreen {
     data object Home : LibraryScreen
     data object NowPlaying : LibraryScreen
+    data object Queue : LibraryScreen
     data object Artists : LibraryScreen
     data object ManageSources : LibraryScreen
     data object Downloads : LibraryScreen
@@ -704,7 +841,37 @@ internal data class NowPlaying(
     val isPlaying: Boolean,
     val positionMs: Long,
     val durationMs: Long,
+    val queueIndex: Int,
+    val queueSize: Int,
 )
+
+internal data class PlaybackQueueItem(
+    val mediaId: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+)
+
+internal data class PlaybackQueue(
+    val items: List<PlaybackQueueItem> = emptyList(),
+    val currentIndex: Int = -1,
+    val shuffleEnabled: Boolean = false,
+    val repeatMode: Int = Player.REPEAT_MODE_OFF,
+)
+
+internal fun PlaybackQueue.positionLabel(): String = if (
+    currentIndex in items.indices
+) {
+    "${currentIndex + 1} of ${items.size}"
+} else {
+    "${items.size} ${pluralize(items.size, "track")}"
+}
+
+internal fun PlaybackQueue.repeatLabel(): String = when (repeatMode) {
+    Player.REPEAT_MODE_ONE -> "Repeat One"
+    Player.REPEAT_MODE_ALL -> "Repeat All"
+    else -> "Repeat Off"
+}
 
 @Composable
 private fun PlayerShell(
@@ -712,6 +879,7 @@ private fun PlayerShell(
     artists: List<LocalArtist>,
     libraryScreen: LibraryScreen,
     nowPlaying: NowPlaying?,
+    playbackQueue: PlaybackQueue,
     jellyfinConfig: JellyfinConfig,
     jellyfinLibraries: List<JellyfinLibrary>,
     jellyfinConnectionState: JellyfinConnectionState,
@@ -730,11 +898,18 @@ private fun PlayerShell(
     onOpenArtist: (LocalArtist) -> Unit,
     onOpenAlbum: (LocalAlbum) -> Unit,
     onOpenNowPlaying: () -> Unit,
+    onOpenQueue: () -> Unit,
     onBack: () -> Unit,
     onPlayAlbum: (LocalAlbum) -> Unit,
     onPlayTrack: (LocalAlbum, Int) -> Unit,
     onPlayJellyfinAlbum: (JellyfinAlbum) -> Unit,
     onPlayJellyfinTrack: (JellyfinAlbum, Int) -> Unit,
+    onPlayQueueItem: (Int) -> Unit,
+    onMoveQueueItem: (Int, Int) -> Unit,
+    onRemoveQueueItem: (Int) -> Unit,
+    onClearQueue: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeatMode: () -> Unit,
     onDownloadJellyfinAlbum: (JellyfinAlbum) -> Unit,
     onRemoveJellyfinAlbumDownloads: (JellyfinAlbum) -> Unit,
     jellyfinDownloadSummary: (JellyfinAlbum) -> AlbumDownloadSummary,
@@ -778,6 +953,17 @@ private fun PlayerShell(
                             nowPlaying = nowPlaying,
                             onBack = onBack,
                             onTogglePlayback = onTogglePlayback,
+                            onOpenQueue = onOpenQueue,
+                        )
+                        LibraryScreen.Queue -> QueueScreen(
+                            queue = playbackQueue,
+                            onBack = onBack,
+                            onPlayItem = onPlayQueueItem,
+                            onMoveItem = onMoveQueueItem,
+                            onRemoveItem = onRemoveQueueItem,
+                            onClear = onClearQueue,
+                            onToggleShuffle = onToggleShuffle,
+                            onCycleRepeatMode = onCycleRepeatMode,
                         )
                         LibraryScreen.Home -> MusicSourcesScreen(
                             localArtists = artists,
@@ -785,10 +971,12 @@ private fun PlayerShell(
                             jellyfinArtists = jellyfinArtists,
                             jellyfinState = jellyfinLibraryState,
                             managedDownloads = managedDownloads,
+                            queue = playbackQueue,
                             onOpenLocal = onOpenLocal,
                             onOpenJellyfin = onOpenJellyfin,
                             onManageSources = onOpenSources,
                             onOpenDownloads = onOpenDownloads,
+                            onOpenQueue = onOpenQueue,
                         )
                         LibraryScreen.Downloads -> DownloadsScreen(
                             downloads = managedDownloads,
@@ -870,10 +1058,12 @@ private fun MusicSourcesScreen(
     jellyfinArtists: List<JellyfinArtist>,
     jellyfinState: JellyfinLibraryState,
     managedDownloads: List<AlbumDownloadDetails>,
+    queue: PlaybackQueue,
     onOpenLocal: () -> Unit,
     onOpenJellyfin: () -> Unit,
     onManageSources: () -> Unit,
     onOpenDownloads: () -> Unit,
+    onOpenQueue: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier
@@ -930,6 +1120,15 @@ private fun MusicSourcesScreen(
                 },
                 onClick = onOpenDownloads,
             )
+        }
+        if (queue.items.isNotEmpty()) {
+            item {
+                SourceCard(
+                    title = "Queue",
+                    subtitle = queue.positionLabel(),
+                    onClick = onOpenQueue,
+                )
+            }
         }
         item {
             TextButton(onClick = onManageSources) {
@@ -1593,10 +1792,109 @@ private fun NowPlayingBar(
 }
 
 @Composable
+private fun QueueScreen(
+    queue: PlaybackQueue,
+    onBack: () -> Unit,
+    onPlayItem: (Int) -> Unit,
+    onMoveItem: (Int, Int) -> Unit,
+    onRemoveItem: (Int) -> Unit,
+    onClear: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeatMode: () -> Unit,
+) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        item {
+            BackHeader("Queue", "Music Sources", onBack)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onToggleShuffle) {
+                    Text(if (queue.shuffleEnabled) "Shuffle On" else "Shuffle Off")
+                }
+                TextButton(onClick = onCycleRepeatMode) { Text(queue.repeatLabel()) }
+                TextButton(onClick = onClear, enabled = queue.items.size > 1) {
+                    Text("Clear Others")
+                }
+            }
+            Text(
+                queue.positionLabel(),
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (queue.items.isEmpty()) {
+            item {
+                Text(
+                    "The queue is empty",
+                    modifier = Modifier.padding(24.dp),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+        } else {
+            itemsIndexed(
+                items = queue.items,
+                key = { index, item -> "$index:${item.mediaId}" },
+            ) { index, item ->
+                val isCurrent = index == queue.currentIndex
+                Surface(
+                    color = if (isCurrent) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    },
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPlayItem(index) }
+                            .padding(horizontal = 24.dp, vertical = 12.dp),
+                    ) {
+                        Text(
+                            if (isCurrent) "▶ ${item.title}" else item.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            listOf(item.artist, item.album)
+                                .filter(String::isNotBlank)
+                                .joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(
+                                onClick = { onMoveItem(index, index - 1) },
+                                enabled = index > 0,
+                            ) { Text("Up") }
+                            TextButton(
+                                onClick = { onMoveItem(index, index + 1) },
+                                enabled = index < queue.items.lastIndex,
+                            ) { Text("Down") }
+                            TextButton(
+                                onClick = { onRemoveItem(index) },
+                                enabled = !isCurrent,
+                            ) { Text("Remove") }
+                        }
+                    }
+                }
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+@Composable
 private fun TouchNowPlayingScreen(
     nowPlaying: NowPlaying?,
     onBack: () -> Unit,
     onTogglePlayback: () -> Unit,
+    onOpenQueue: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -1618,6 +1916,12 @@ private fun TouchNowPlayingScreen(
         }
         Text(nowPlaying?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium)
         Text(nowPlaying?.artist.orEmpty(), style = MaterialTheme.typography.titleMedium)
+        nowPlaying?.takeIf { it.queueSize > 0 }?.let {
+            Text(
+                "${it.queueIndex + 1} of ${it.queueSize}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
         Spacer(Modifier.height(20.dp))
         if (nowPlaying != null) {
             LinearProgressIndicator(
@@ -1642,6 +1946,7 @@ private fun TouchNowPlayingScreen(
             Button(onClick = onTogglePlayback) {
                 Text(if (nowPlaying.isPlaying) "Pause" else "Play")
             }
+            TextButton(onClick = onOpenQueue) { Text("View Queue") }
         }
     }
 }
