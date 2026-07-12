@@ -14,6 +14,8 @@ kiosk provisioning, or hardware work unless the user changes the roadmap.
 Read `docs/HANDOFF.md` before substantial work. It contains the current implementation state,
 roadmap, acceptance tests, and device-testing checklist. Update it when a session materially
 changes the architecture, roadmap status, or handoff instructions.
+Use `.agents/skills/track-repo-features/SKILL.md` for material feature updates and fresh-chat
+handoffs; keep `docs/HANDOFF.md` as the lightweight source of truth.
 
 ## Build and device workflow
 

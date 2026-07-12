@@ -1,0 +1,4 @@
+interface:
+  display_name: "Track Repository Features"
+  short_description: "Keep feature handoffs concise and current"
+  default_prompt: "Use $track-repo-features to update this repository’s feature status and next steps."
