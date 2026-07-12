@@ -51,8 +51,9 @@ CONTROL_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_ENTITY_ID): cv.entity_id,
         vol.Required(ATTR_COMMAND): vol.In(
-            ("play", "pause", "volume_up", "volume_down"),
+            ("play", "pause", "previous", "next", "seek", "volume_up", "volume_down"),
         ),
+        vol.Optional(ATTR_POSITION_MS, default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
     },
 )
 
@@ -139,13 +140,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 service = {
                     "play": "media_play",
                     "pause": "media_pause",
+                    "previous": "media_previous_track",
+                    "next": "media_next_track",
+                    "seek": "media_seek",
                     "volume_up": "volume_up",
                     "volume_down": "volume_down",
                 }[command]
+                service_data = (
+                    {"seek_position": call.data[ATTR_POSITION_MS] / 1000}
+                    if command == "seek"
+                    else {}
+                )
                 await hass.services.async_call(
                     "media_player",
                     service,
-                    {},
+                    service_data,
                     target={ATTR_ENTITY_ID: coordinator_id},
                     blocking=True,
                 )

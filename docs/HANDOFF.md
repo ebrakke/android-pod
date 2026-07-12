@@ -129,7 +129,7 @@ selecting Reclaimed Player or restoring the GrapheneOS launcher.
 
 ### Home Assistant and Sonos handoff
 
-Status: **functional initial slice, one-way and Jellyfin-only**.
+Status: **functional one-way dock controller, Jellyfin-only**.
 
 **User flow and behavior**
 
@@ -138,9 +138,19 @@ Status: **functional initial slice, one-way and Jellyfin-only**.
 - A successful handoff clears the Sonos coordinator queue, appends the ordered album through
   opaque HA proxy URLs, starts the saved queue index, seeks to the phone position, and preserves
   playing or paused intent. The Pixel pauses only after HA reports success.
-- The active handoff becomes an in-memory remote session. Play/Pause routes to Sonos from Continue
-  on, Touch Now Playing, the persistent bottom player, and Classic controls. Volume routes from
+- The active handoff becomes an in-memory remote session. A focused coordinator polls Home
+  Assistant once per second so Touch, Classic, and the persistent player show Sonos play state,
+  title, artist, queue position, duration, and progress. Media selected externally on Sonos is
+  shown without falsely claiming that it belongs to the phone queue.
+- Play/Pause, Previous, Next, and seek route to Sonos. Previous restarts the current track when it
+  is more than three seconds in and otherwise moves to the prior queue item. Volume routes from
   Touch buttons, physical Android volume keys, and Classic Now Playing wheel rotation.
+- Touch Now Playing has direct Previous/Next buttons and a seek slider. Its content scrolls so the
+  full remote-control and Continue on actions remain reachable on the Pixel 6 display.
+- During an active handoff, Touch Now Playing names the connected Sonos room instead of showing
+  **Continue on…** and offers **Disconnect**. Disconnect pauses Sonos before clearing remote mode,
+  restores the paused local Media3 session and controls, and keeps remote mode active with an error
+  if Home Assistant cannot confirm the pause. The Continue on detail screen offers the same action.
 - Continue on is a child of Now Playing. Back navigation returns through Now Playing to the prior
   Music Sources destination instead of looping between the two playback screens.
 - HA connection settings and the long-lived token are encrypted with Android Keystore. Token setup
@@ -150,10 +160,11 @@ Status: **functional initial slice, one-way and Jellyfin-only**.
 
 - `app/src/main/java/dev/reclaimed/player/homeassistant/` owns encrypted HA settings, REST calls,
   QR parsing, Sonos models, and the Continue on Touch screen.
-- `MainActivity.kt` owns the current `ActiveSonosSession` and routes transport/volume controls. This
-  is intentionally small but should move into a focused coordinator before remote control grows.
-- `home-assistant/custom_components/reclaimed_player/` is custom integration version 0.3.0. It
-  exposes `list_players`, `continue_on`, and coordinator-aware `control` response actions.
+- `SonosSessionCoordinator.kt` owns the in-memory remote session, serialized commands, and polling;
+  `MainActivity.kt` maps remote metadata back to the stable local queue and routes shared controls.
+- `home-assistant/custom_components/reclaimed_player/` is custom integration version 0.4.0. It
+  exposes `list_players`, `continue_on`, and coordinator-aware `control` response actions for play,
+  pause, previous, next, seek, and volume.
 - HA looks up Jellyfin container metadata with either `/Users/Me` user-token scope or an API-key
   fallback. Proxy paths carry the real audio extension and forward authentication and HTTP Range
   requests; grants are opaque and expire after 24 hours.
@@ -182,18 +193,36 @@ Status: **functional initial slice, one-way and Jellyfin-only**.
   volume path. A transient port-1400 timeout was shown in the UI and succeeded on retry.
 - The Touch navigation regression path was exercised end to end: Music Sources → Now Playing →
   Continue on → persistent Now Playing → Back returned to Music Sources.
+- Integration 0.4.0 passed `ha core check`, restarted cleanly through `just ha-deploy`, and the
+  stable-signing-key debug APK upgraded the physical GrapheneOS Pixel 6 without clearing app data.
+- Office accepted the persisted 12-track Big Thief queue paused on **Little Arrow**. Touch Next
+  moved to **Masterpiece** (`2 of 12`) and Previous returned to **Little Arrow** (`1 of 12`). The
+  Touch slider sought to about 1:28, live progress advanced while playing, Previous restarted the
+  track near zero, and Play/Pause left Office and the Pixel paused on track 1.
+- Classic Previous/Next targeted the same Office session and moved between tracks 1 and 2 while
+  paused. An externally active Office track also updated title, artist, duration, progress, and
+  play state on the Pixel without being labeled as part of the phone queue.
+- Bedroom accepted the paused 8-track queue on **Bulls**. Touch Now Playing showed **PLAYING ON
+  BEDROOM**, **Playing on Bedroom**, and **Disconnect** instead of **Continue on…**. Sonos was
+  started, Disconnect restored local Now Playing in its paused state, and a fresh HA discovery
+  reported Bedroom paused. The Pixel and Bedroom were left paused.
+- `mise exec -- just check` passed assemble, Android lint, and all six JVM tests. The HA Python
+  helper test passed with `python3 -m unittest discover -s home-assistant/tests -v`.
 
 **Known limitations and next work**
 
-- The remote session is not persisted and HA is not polled. An app or HA restart loses remote mode;
-  external Sonos changes can leave the phone's play-state indicator stale.
-- Previous, Next, seek/progress, current remote metadata, and queue editing still target or describe
-  the paused local Media3 session. Add remote state polling and route these controls before calling
-  the phone a full Sonos controller.
-- Reverse handoff to the Pixel, shuffle-order transfer, Sonos grouping UI, durable proxy grants,
-  NFC/Qi dock mapping, and Spotify/provider-specific handoff remain planned.
-- Only the Den and Kitchen paths above are verified. Test the remaining targets, active-playing
-  handoff from the outset, track transitions, expired grants, HA restart, and network loss.
+- The remote session is not persisted. An app or HA restart loses remote mode even though Sonos
+  continues playing; reconnect/reverse-handoff recovery is still required.
+- Queue editing still targets the paused local Media3 session. Disable it during remote mode or add
+  an explicit Sonos queue contract before treating the phone as a complete remote queue editor.
+- Polling relies on Home Assistant's Sonos entity metadata and reports transient network failures
+  in the Continue on screen; disconnected/reconnected and grouped-coordinator changes need broader
+  live acceptance coverage.
+- Resume-at-position reverse handoff to the Pixel, shuffle-order transfer, Sonos grouping UI,
+  durable proxy grants, NFC/Qi dock mapping, and Spotify/provider-specific handoff remain planned.
+- Den, Kitchen, Office, and Bedroom have the coverage recorded above. Test the remaining targets,
+  active-playing handoff from the outset, natural track transitions, expired grants, HA restart,
+  grouping changes, and network loss.
 
 ### Interface modes
 
@@ -384,13 +413,16 @@ Do not create an elaborate universal provider framework prematurely. Let local m
 define the first useful boundary; reconsider it only when a second remote provider is actually
 being implemented.
 
-### 8. Build iHome-style household handoff — initial Continue on slice implemented
+### 8. Build iHome-style household handoff — one-way dock controller implemented
 
-- [x] Continue a full ordered Jellyfin album on Den and Kitchen through HA's native Sonos entities.
+- [x] Continue a full ordered Jellyfin album on Den, Kitchen, and Office through HA's native Sonos
+  entities.
 - [x] Preserve the selected queue index, playback position, and paused intent on those paths.
 - [x] Route Play/Pause and incremental volume through the active Sonos group in Touch and Classic.
-- [ ] Poll authoritative Sonos state and show remote metadata, progress, play state, and volume.
-- [ ] Route Previous, Next, and seek remotely; define what local queue editing does after handoff.
+- [x] Poll authoritative Sonos state and show remote metadata, progress, and play state.
+- [x] Route Previous, Next, and seek remotely in Touch; route shared transport controls in Classic.
+- [ ] Show the authoritative Sonos volume level instead of only incremental volume controls.
+- [ ] Define and implement what local queue editing does after handoff.
 - [ ] Persist enough session identity to recover remote mode after Android process recreation.
 - [ ] Verify remaining Sonos targets, initially-playing intent, transitions, network loss, grant
   expiry, and HA restart behavior.
@@ -401,11 +433,10 @@ being implemented.
 
 ## Suggested first task for the next session
 
-Make the active Sonos session authoritative without introducing a provider framework. Add one
-small HA status response and a focused Android state holder outside `MainActivity`; poll only while
-a handoff is active, display remote play state/position/volume, and route Previous/Next. Preserve
-the existing local/Jellyfin boundary. Verify against Kitchen, finish paused at volume 27, and use
-`just ha-deploy` plus `just install` for the live loop.
+Recover the active Sonos session after Android process recreation without introducing a provider
+framework. Persist only stable HA entity and queue identity, verify Sonos still owns the expected
+Reclaimed Player queue before restoring remote mode, and provide an explicit escape when it does
+not. Preserve the local/Jellyfin boundary and leave Sonos playback paused after device acceptance.
 
 ## Device-testing checklist
 
@@ -414,9 +445,9 @@ Before the physical-device pass, run the repeatable local baseline:
 - `just emulator-check` for compilation, lint, JVM tests, and install/launch/crash verification.
 - Review its generated screenshot when UI changed.
 
-JVM tests currently cover Home Assistant QR token parsing, and Python tests cover the pure Jellyfin
-stream URL helper. Add focused tests as remote session state and source coordination move out of
-Android UI code; do not treat the smoke launch as behavioral coverage.
+JVM tests cover Home Assistant QR token parsing and Sonos state/progress parsing; Python tests cover
+the pure Jellyfin stream URL helper. Add focused tests as remote session recovery and source
+coordination evolve; do not treat the smoke launch as behavioral coverage.
 
 For each meaningful playback change, test on the physical Pixel:
 

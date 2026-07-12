@@ -41,7 +41,7 @@ continue_on:
 
 control:
   name: Control Sonos playback
-  description: Plays or pauses the active Reclaimed Player queue on a Sonos group.
+  description: Controls the active Reclaimed Player queue on a Sonos group.
   fields:
     entity_id:
       name: Sonos player
@@ -58,5 +58,16 @@ control:
           options:
             - play
             - pause
+            - previous
+            - next
+            - seek
             - volume_up
             - volume_down
+    position_ms:
+      name: Seek position
+      description: Position in milliseconds used by the seek command.
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box

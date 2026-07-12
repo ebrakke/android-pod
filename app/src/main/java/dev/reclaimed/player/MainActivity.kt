@@ -105,6 +105,8 @@ import dev.reclaimed.player.homeassistant.HomeAssistantConfig
 import dev.reclaimed.player.homeassistant.HomeAssistantSettingsStore
 import dev.reclaimed.player.homeassistant.JellyfinHandoff
 import dev.reclaimed.player.homeassistant.SonosPlayer
+import dev.reclaimed.player.homeassistant.SonosRemoteSession
+import dev.reclaimed.player.homeassistant.SonosSessionCoordinator
 import dev.reclaimed.player.homeassistant.ContinueOnScreen
 import dev.reclaimed.player.homeassistant.ContinueOnState
 import dev.reclaimed.player.homeassistant.parseHomeAssistantTokenQr
@@ -121,7 +123,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private var artists by mutableStateOf<List<LocalArtist>>(emptyList())
@@ -143,8 +144,8 @@ class MainActivity : ComponentActivity() {
     )
     private var homeAssistantConfig by mutableStateOf(HomeAssistantConfig())
     private var continueOnState by mutableStateOf<ContinueOnState>(ContinueOnState.Idle)
-    private var activeSonosSession by mutableStateOf<ActiveSonosSession?>(null)
-    private val sonosVolumeExecutor = Executors.newSingleThreadExecutor()
+    private var activeSonosSession by mutableStateOf<SonosRemoteSession?>(null)
+    private lateinit var sonosSessionCoordinator: SonosSessionCoordinator
     private lateinit var jellyfinSettingsStore: JellyfinSettingsStore
     private lateinit var jellyfinMetadataCache: JellyfinMetadataCache
     private lateinit var jellyfinDownloadStore: JellyfinDownloadStore
@@ -194,6 +195,27 @@ class MainActivity : ComponentActivity() {
         jellyfinMetadataCache = JellyfinMetadataCache(this)
         jellyfinDownloadStore = JellyfinDownloadStore(this)
         homeAssistantSettingsStore = HomeAssistantSettingsStore(this)
+        sonosSessionCoordinator = SonosSessionCoordinator { session ->
+            runOnUiThread {
+                activeSonosSession = session
+                if (session != null) {
+                    updateNowPlayingFromSonos(session)
+                } else {
+                    controller?.let(::updateNowPlaying)
+                    continueOnState = ContinueOnState.Idle
+                    if (libraryScreen is LibraryScreen.ContinueOn) {
+                        libraryScreen = LibraryScreen.NowPlaying
+                    }
+                }
+                if (session != null && continueOnState is ContinueOnState.Complete) {
+                    continueOnState = ContinueOnState.Complete(
+                        player = session.player,
+                        isPlaying = session.isPlaying,
+                        error = session.error,
+                    )
+                }
+            }
+        }
         interfaceModeStore = InterfaceModeStore(this)
         interfaceMode = interfaceModeStore.load()
         jellyfinConfig = jellyfinSettingsStore.load()
@@ -311,7 +333,7 @@ class MainActivity : ComponentActivity() {
                     onOpenQueue = commonShell.onOpenQueue,
                     homeAssistantConfig = homeAssistantConfig,
                     continueOnState = continueOnState,
-                    sonosSessionActive = activeSonosSession != null,
+                    activeSonosSession = activeSonosSession,
                     onBack = ::navigateBack,
                     onPlayAlbum = { album -> play(album, 0) },
                     onPlayTrack = ::play,
@@ -339,6 +361,7 @@ class MainActivity : ComponentActivity() {
                     onScanHomeAssistantToken = ::scanHomeAssistantToken,
                     onOpenContinueOn = ::openContinueOn,
                     onContinueOn = ::continueOn,
+                    onDisconnectSonos = sonosSessionCoordinator::disconnect,
                     onOpenTailscale = ::openTailscale,
                     onOpenWifiSettings = { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) },
                     onOpenBluetoothSettings = {
@@ -415,7 +438,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        sonosVolumeExecutor.shutdownNow()
+        sonosSessionCoordinator.close()
         super.onDestroy()
     }
 
@@ -551,9 +574,15 @@ class MainActivity : ComponentActivity() {
             }
             runOnUiThread {
                 result.onSuccess {
-                    activeSonosSession = ActiveSonosSession(player, handoff.wasPlaying)
                     nowPlaying = nowPlaying?.copy(isPlaying = handoff.wasPlaying)
                     controller?.pause()
+                    sonosSessionCoordinator.activate(
+                        config = homeAssistantConfig,
+                        player = player,
+                        queueIndex = handoff.currentIndex,
+                        positionMs = handoff.positionMs,
+                        wasPlaying = handoff.wasPlaying,
+                    )
                     continueOnState = ContinueOnState.Complete(player, handoff.wasPlaying)
                 }.onFailure {
                     continueOnState = ContinueOnState.Error(
@@ -912,89 +941,43 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun togglePlayback() {
-        val sonosSession = activeSonosSession
-        if (sonosSession != null) {
-            val requestedPlaying = !sonosSession.isPlaying
-            activeSonosSession = sonosSession.copy(isPlaying = requestedPlaying)
-            nowPlaying = nowPlaying?.copy(isPlaying = requestedPlaying)
-            continueOnState = ContinueOnState.Complete(
-                player = sonosSession.player,
-                isPlaying = requestedPlaying,
-                isChanging = true,
-            )
-            Thread {
-                val result = runCatching {
-                    HomeAssistantClient(homeAssistantConfig).setSonosPlayback(
-                        sonosSession.player,
-                        requestedPlaying,
-                    )
-                }
-                runOnUiThread {
-                    result.onSuccess { isPlaying ->
-                        activeSonosSession = sonosSession.copy(isPlaying = isPlaying)
-                        nowPlaying = nowPlaying?.copy(isPlaying = isPlaying)
-                        continueOnState = ContinueOnState.Complete(
-                            sonosSession.player,
-                            isPlaying,
-                        )
-                    }.onFailure { error ->
-                        activeSonosSession = sonosSession
-                        nowPlaying = nowPlaying?.copy(isPlaying = sonosSession.isPlaying)
-                        continueOnState = ContinueOnState.Complete(
-                            player = sonosSession.player,
-                            isPlaying = sonosSession.isPlaying,
-                            error = error.message ?: "Unable to control Sonos playback",
-                        )
-                    }
-                }
-            }.start()
+        if (activeSonosSession != null) {
+            sonosSessionCoordinator.togglePlayback()
             return
         }
         controller?.let { if (it.isPlaying) it.pause() else it.play() }
     }
 
     private fun previousTrack() {
+        if (activeSonosSession != null) {
+            sonosSessionCoordinator.previous()
+            return
+        }
         controller?.let { player ->
             if (player.currentPosition > 3_000) player.seekTo(0) else player.seekToPreviousMediaItem()
         }
     }
 
     private fun nextTrack() {
+        if (activeSonosSession != null) {
+            sonosSessionCoordinator.next()
+            return
+        }
         controller?.seekToNextMediaItem()
     }
 
     private fun seekTo(positionMs: Long) {
-        controller?.seekTo(positionMs)
+        if (activeSonosSession != null) {
+            sonosSessionCoordinator.seekTo(positionMs)
+        } else {
+            controller?.seekTo(positionMs)
+        }
     }
 
     private fun adjustVolume(direction: Int): Float? {
         val sonosSession = activeSonosSession
         if (sonosSession != null) {
-            sonosVolumeExecutor.execute {
-                runCatching {
-                    HomeAssistantClient(homeAssistantConfig).adjustSonosVolume(
-                        sonosSession.player,
-                        direction,
-                    )
-                }.onSuccess {
-                    runOnUiThread {
-                        val current = activeSonosSession ?: return@runOnUiThread
-                        continueOnState = ContinueOnState.Complete(
-                            player = current.player,
-                            isPlaying = current.isPlaying,
-                        )
-                    }
-                }.onFailure { error ->
-                    runOnUiThread {
-                        val current = activeSonosSession ?: return@runOnUiThread
-                        continueOnState = ContinueOnState.Complete(
-                            player = current.player,
-                            isPlaying = current.isPlaying,
-                            error = error.message ?: "Unable to adjust Sonos volume",
-                        )
-                    }
-                }
-            }
+            sonosSessionCoordinator.adjustVolume(direction)
             return null
         }
         val audioManager = getSystemService(AudioManager::class.java)
@@ -1035,6 +1018,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateNowPlaying(player: Player) {
+        activeSonosSession?.let {
+            updateNowPlayingFromSonos(it)
+            return
+        }
         val metadata = player.currentMediaItem?.mediaMetadata
         nowPlaying = metadata?.title?.toString()?.let { title ->
             NowPlaying(
@@ -1044,13 +1031,51 @@ class MainActivity : ComponentActivity() {
                     runCatching { PlaybackSource.valueOf(it) }.getOrNull()
                 },
                 artworkUri = metadata.artworkUri,
-                isPlaying = activeSonosSession?.isPlaying ?: player.isPlaying,
+                isPlaying = player.isPlaying,
                 positionMs = player.currentPosition.coerceAtLeast(0L),
                 durationMs = player.duration.takeIf { it > 0L } ?: 0L,
                 queueIndex = player.currentMediaItemIndex,
                 queueSize = player.mediaItemCount,
             )
         }
+    }
+
+    private fun updateNowPlayingFromSonos(session: SonosRemoteSession) {
+        val player = controller ?: return
+        if (player.mediaItemCount == 0) return
+        val matchingIndices = (0 until player.mediaItemCount).filter { index ->
+            val metadata = player.getMediaItemAt(index).mediaMetadata
+            session.title.isNotBlank() && metadata.title?.toString() == session.title &&
+                (session.artist.isBlank() || metadata.artist?.toString() == session.artist)
+        }
+        val matchedIndex = matchingIndices.minByOrNull { candidate ->
+            kotlin.math.abs(candidate - session.queueIndex)
+        }
+        val belongsToQueue = matchedIndex != null || session.title.isBlank()
+        val index = matchedIndex ?: session.queueIndex.coerceIn(0, player.mediaItemCount - 1)
+        if (matchedIndex != null && index != session.queueIndex) {
+            sonosSessionCoordinator.updateQueueIndex(index)
+        }
+        val metadata = player.getMediaItemAt(index).mediaMetadata
+        nowPlaying = NowPlaying(
+            title = session.title.ifBlank { metadata.title?.toString().orEmpty() },
+            artist = session.artist.ifBlank { metadata.artist?.toString().orEmpty() },
+            source = if (belongsToQueue) {
+                metadata.extras?.getString(PlaybackItemMetadata.SOURCE)?.let {
+                    runCatching { PlaybackSource.valueOf(it) }.getOrNull()
+                }
+            } else {
+                null
+            },
+            artworkUri = metadata.artworkUri.takeIf { belongsToQueue },
+            isPlaying = session.isPlaying,
+            positionMs = session.positionMs,
+            durationMs = session.durationMs.takeIf { it > 0L }
+                ?: player.duration.takeIf { it > 0L }
+                ?: 0L,
+            queueIndex = if (belongsToQueue) index else 0,
+            queueSize = if (belongsToQueue) player.mediaItemCount else 0,
+        )
     }
 
     private fun updatePlaybackQueue(player: Player) {
@@ -1133,11 +1158,6 @@ internal data class NowPlaying(
     val queueSize: Int,
 )
 
-private data class ActiveSonosSession(
-    val player: SonosPlayer,
-    val isPlaying: Boolean,
-)
-
 internal data class PlaybackQueueItem(
     val mediaId: String,
     val title: String,
@@ -1180,7 +1200,7 @@ private fun PlayerShell(
     jellyfinLibraryState: JellyfinLibraryState,
     homeAssistantConfig: HomeAssistantConfig,
     continueOnState: ContinueOnState,
-    sonosSessionActive: Boolean,
+    activeSonosSession: SonosRemoteSession?,
     downloadRevision: Int,
     managedDownloads: List<AlbumDownloadDetails>,
     jellyfinArtworkUri: (JellyfinAlbum) -> Uri,
@@ -1222,6 +1242,7 @@ private fun PlayerShell(
     onScanHomeAssistantToken: (String) -> Unit,
     onOpenContinueOn: () -> Unit,
     onContinueOn: (SonosPlayer) -> Unit,
+    onDisconnectSonos: () -> Unit,
     onOpenTailscale: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenBluetoothSettings: () -> Unit,
@@ -1255,16 +1276,18 @@ private fun PlayerShell(
                             onPrevious = onPrevious,
                             onNext = onNext,
                             onSeek = onSeek,
-                            sonosSessionActive = sonosSessionActive,
+                            activeSonosSession = activeSonosSession,
                             onAdjustVolume = onAdjustVolume,
                             onOpenQueue = onOpenQueue,
                             onOpenContinueOn = onOpenContinueOn,
+                            onDisconnectSonos = onDisconnectSonos,
                         )
                         LibraryScreen.ContinueOn -> ContinueOnScreen(
                             state = continueOnState,
                             onContinueOn = onContinueOn,
                             onTogglePlayback = onTogglePlayback,
                             onAdjustVolume = onAdjustVolume,
+                            onDisconnect = onDisconnectSonos,
                             onBack = onBack,
                         )
                         LibraryScreen.Queue -> QueueScreen(
@@ -2430,11 +2453,13 @@ private fun TouchNowPlayingScreen(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
-    sonosSessionActive: Boolean,
+    activeSonosSession: SonosRemoteSession?,
     onAdjustVolume: (Int) -> Unit,
     onOpenQueue: () -> Unit,
     onOpenContinueOn: () -> Unit,
+    onDisconnectSonos: () -> Unit,
 ) {
+    val activeSonosPlayer = activeSonosSession?.player
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2449,8 +2474,8 @@ private fun TouchNowPlayingScreen(
         ) {
             TextButton(onClick = onBack) { Text("←  Back") }
             Text(
-                if (sonosSessionActive) "PLAYING ON SONOS" else "NOW PLAYING",
-                color = if (sonosSessionActive) TouchOrange else TouchBlue,
+                activeSonosPlayer?.let { "PLAYING ON ${it.name.uppercase()}" } ?: "NOW PLAYING",
+                color = if (activeSonosPlayer != null) TouchOrange else TouchBlue,
                 style = MaterialTheme.typography.labelLarge,
             )
         }
@@ -2537,7 +2562,7 @@ private fun TouchNowPlayingScreen(
                 )
                 PlayerControlButton("▶|", "Next", onNext)
             }
-            if (sonosSessionActive) {
+            if (activeSonosPlayer != null) {
                 Spacer(Modifier.height(16.dp))
                 Surface(
                     shape = RoundedCornerShape(50),
@@ -2554,11 +2579,20 @@ private fun TouchNowPlayingScreen(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 TextButton(onClick = onOpenQueue) { Text("Queue") }
-                if (nowPlaying.source == PlaybackSource.JELLYFIN) {
+                if (activeSonosPlayer != null) {
+                    Text("Playing on ${activeSonosPlayer.name}")
+                    TextButton(onClick = onDisconnectSonos) { Text("Disconnect") }
+                } else if (nowPlaying.source == PlaybackSource.JELLYFIN) {
                     TextButton(onClick = onOpenContinueOn) { Text("Continue on…") }
                 }
+            }
+            activeSonosSession?.error?.let { message ->
+                Text(message, color = MaterialTheme.colorScheme.error)
             }
             Spacer(Modifier.height(16.dp))
         }

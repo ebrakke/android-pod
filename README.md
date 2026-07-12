@@ -206,12 +206,15 @@ long-lived Home Assistant access token, then choose **Connect and find Sonos spe
 is stored in Android Keystore-backed encrypted app storage. While a Jellyfin queue is active, open
 Now Playing and choose **Continue on…**.
 
-After a successful handoff the phone pauses and Sonos owns playback. The Continue on screen,
-Touch Now Playing button, persistent bottom player, and Classic Play/Pause control then target the
-active Sonos group without restarting local playback. Reverse handoff, remote track/position
-polling, dock/NFC triggers, grouping controls, shuffle-order transfer, and durable stream grants
-across a Home Assistant restart remain future work. While a Sonos session is active, Touch volume
-buttons, Android hardware volume keys, and Classic Now Playing wheel rotation adjust Sonos volume.
+After a successful handoff the phone pauses and Sonos owns playback. The app polls Home Assistant
+while that in-memory remote session is active, so Touch, Classic, and the persistent player show
+Sonos metadata, progress, queue position, and play state. Play/Pause, Previous, Next, and Touch seek
+target the active Sonos group without restarting local playback. Touch volume buttons, Android
+hardware volume keys, and Classic Now Playing wheel rotation adjust Sonos volume.
+
+Remote-session recovery after an app or Home Assistant restart, reverse handoff, remote queue
+editing, dock/NFC triggers, grouping controls, shuffle-order transfer, and durable stream grants
+across a Home Assistant restart remain future work.
 
 For development, authorize `~/.ssh/reclaimed_player_ha.pub` in HA's SSH app once, then run
 `mise exec -- just ha-deploy`. The command stages the component under `/config`, compiles it,

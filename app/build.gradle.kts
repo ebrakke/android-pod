@@ -52,4 +52,5 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation(kotlin("test-junit"))
+    testImplementation("org.json:json:20250517")
 }

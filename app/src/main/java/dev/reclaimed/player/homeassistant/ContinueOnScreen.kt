@@ -40,6 +40,7 @@ fun ContinueOnScreen(
     onContinueOn: (SonosPlayer) -> Unit,
     onTogglePlayback: () -> Unit,
     onAdjustVolume: (Int) -> Unit,
+    onDisconnect: () -> Unit,
     onBack: () -> Unit,
 ) {
     LazyColumn(
@@ -93,6 +94,8 @@ fun ContinueOnScreen(
                     Button(onClick = { onAdjustVolume(-1) }) { Text("Volume −") }
                     Button(onClick = { onAdjustVolume(1) }) { Text("Volume +") }
                 }
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = onDisconnect) { Text("Disconnect from ${state.player.name}") }
                 state.error?.let { message ->
                     Spacer(Modifier.height(8.dp))
                     Text(message, color = MaterialTheme.colorScheme.error)
