@@ -218,7 +218,25 @@ Both interfaces operate on the same navigation and playback state.
 
 - Conventional direct-touch browsing and source management.
 - Richer download controls and connection settings.
-- A persistent Classic button switches back without changing the current destination.
+- Uses a fixed warm-neutral, ink, blue, and orange visual system defined in `TouchTheme.kt`; this is
+  the product's Touch presentation rather than a user-selectable theming feature.
+- The Touch home uses compact, source-specific cards and keeps the active queue visibly separate
+  from On Device, Jellyfin, and Downloads. A dark persistent mini-player provides artwork,
+  metadata, and a 48 dp play/pause target without obscuring the source list.
+- Touch Now Playing uses a large artwork surface, live seek preview with elapsed/remaining time,
+  accessible circular transport targets, and Sonos-specific status and volume treatment. The
+  redundant mini-player is hidden on this full player screen and remains available elsewhere.
+- A persistent, pill-shaped Classic button switches back without changing the current destination.
+
+**Touch verification (Pixel 6 API 36 emulator, July 12, 2026)**
+
+- `mise exec -- just emulator-check` passed: debug assemble, lint, JVM tests, install, cold launch,
+  crash check, screenshot, and UI hierarchy capture.
+- The Home, Now Playing, Queue, and On Device artist screens were inspected at the AVD's native
+  1080 x 2400 resolution using the persisted one-track MediaStore fixture and playback session.
+- Home/Touch mode persistence, the mini-player route to Now Playing, Now Playing back navigation,
+  the Queue route, and local source browsing were exercised. Physical-Pixel checks remain pending,
+  including font scaling, real album art, Jellyfin-heavy lists, and active Sonos state.
 
 Mode preference survives process death. Classic mode hides system bars with transient edge-swipe
 access; Touch mode restores them.

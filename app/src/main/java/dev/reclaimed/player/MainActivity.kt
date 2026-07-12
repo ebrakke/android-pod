@@ -31,18 +31,24 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -56,12 +62,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -272,7 +283,8 @@ class MainActivity : ComponentActivity() {
                             startActivity(Intent(Settings.ACTION_SETTINGS))
                         },
                     )
-                } else PlayerShell(
+                } else ReclaimedTouchTheme {
+                    PlayerShell(
                     libraryState = libraryState,
                     artists = artists,
                     libraryScreen = libraryScreen,
@@ -316,6 +328,9 @@ class MainActivity : ComponentActivity() {
                     jellyfinDownloadSummary = jellyfinDownloadStore::summary,
                     onRefreshDownloads = { downloadRevision += 1 },
                     onTogglePlayback = ::togglePlayback,
+                    onPrevious = ::previousTrack,
+                    onNext = ::nextTrack,
+                    onSeek = ::seekTo,
                     onAdjustVolume = ::adjustVolume,
                     onConnectJellyfin = ::connectJellyfin,
                     onStartQuickConnect = ::startQuickConnect,
@@ -330,8 +345,9 @@ class MainActivity : ComponentActivity() {
                         startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
                     },
                     onOpenSystemSettings = { startActivity(Intent(Settings.ACTION_SETTINGS)) },
-                    onSwitchToClassic = { switchInterfaceMode(InterfaceMode.Classic) },
-                )
+                        onSwitchToClassic = { switchInterfaceMode(InterfaceMode.Classic) },
+                    )
+                }
             }
         }
         ensureAudioPermission()
@@ -947,6 +963,10 @@ class MainActivity : ComponentActivity() {
         controller?.seekToNextMediaItem()
     }
 
+    private fun seekTo(positionMs: Long) {
+        controller?.seekTo(positionMs)
+    }
+
     private fun adjustVolume(direction: Int): Float? {
         val sonosSession = activeSonosSession
         if (sonosSession != null) {
@@ -1004,8 +1024,12 @@ class MainActivity : ComponentActivity() {
         insetsController.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         if (interfaceMode == InterfaceMode.Classic) {
+            insetsController.isAppearanceLightStatusBars = false
+            insetsController.isAppearanceLightNavigationBars = false
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
         } else {
+            insetsController.isAppearanceLightStatusBars = true
+            insetsController.isAppearanceLightNavigationBars = true
             insetsController.show(WindowInsetsCompat.Type.systemBars())
         }
     }
@@ -1187,6 +1211,9 @@ private fun PlayerShell(
     jellyfinDownloadSummary: (JellyfinAlbum) -> AlbumDownloadSummary,
     onRefreshDownloads: () -> Unit,
     onTogglePlayback: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Long) -> Unit,
     onAdjustVolume: (Int) -> Unit,
     onConnectJellyfin: (String, String) -> Unit,
     onStartQuickConnect: (String) -> Unit,
@@ -1202,22 +1229,17 @@ private fun PlayerShell(
     onSwitchToClassic: () -> Unit,
 ) {
     BackHandler(enabled = libraryScreen !is LibraryScreen.Home, onBack = onBack)
-    Surface(modifier = Modifier.fillMaxSize()) {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = 40.dp),
+                .statusBarsPadding()
+                .navigationBarsPadding(),
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = onSwitchToClassic) { Text("Classic") }
-            }
+            TouchTopBar(onSwitchToClassic)
             Box(modifier = Modifier.weight(1f)) {
                 when (libraryState) {
                     LibraryState.Loading -> StatusMessage("Scanning this device…")
@@ -1230,6 +1252,9 @@ private fun PlayerShell(
                             nowPlaying = nowPlaying,
                             onBack = onBack,
                             onTogglePlayback = onTogglePlayback,
+                            onPrevious = onPrevious,
+                            onNext = onNext,
+                            onSeek = onSeek,
                             sonosSessionActive = sonosSessionActive,
                             onAdjustVolume = onAdjustVolume,
                             onOpenQueue = onOpenQueue,
@@ -1335,9 +1360,42 @@ private fun PlayerShell(
                 }
             }
 
-            nowPlaying?.let {
-                NowPlayingBar(it, onTogglePlayback, onOpenNowPlaying)
+            if (libraryScreen !is LibraryScreen.NowPlaying) {
+                nowPlaying?.let {
+                    NowPlayingBar(it, onTogglePlayback, onOpenNowPlaying)
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun TouchTopBar(onSwitchToClassic: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .padding(horizontal = 24.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "RECLAIMED",
+            color = TouchBlue,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Black,
+        )
+        Surface(
+            modifier = Modifier.clickable(onClick = onSwitchToClassic),
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.primaryContainer,
+        ) {
+            Text(
+                "CLASSIC",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                style = MaterialTheme.typography.labelLarge,
+            )
         }
     }
 }
@@ -1360,24 +1418,28 @@ private fun MusicSourcesScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
             Text(
-                "Music Sources",
-                modifier = Modifier.padding(top = 18.dp, bottom = 4.dp),
-                style = MaterialTheme.typography.headlineLarge,
+                "Your music,\nready when you are.",
+                modifier = Modifier.padding(top = 10.dp, bottom = 8.dp),
+                style = MaterialTheme.typography.displaySmall,
             )
             Text(
-                "Choose where you want to listen.",
+                "Choose a source and keep the listening simple.",
+                color = TouchMuted,
                 style = MaterialTheme.typography.bodyMedium,
             )
+            Spacer(Modifier.height(12.dp))
         }
         item {
             SourceCard(
+                mark = "♪",
                 title = "On Device",
                 subtitle = "${localArtists.size} artists · " +
                     "${localArtists.sumOf { it.trackCount }} tracks",
+                accent = TouchBlue,
                 onClick = onOpenLocal,
             )
         }
@@ -1392,8 +1454,10 @@ private fun MusicSourcesScreen(
                     is JellyfinLibraryState.Error -> "Unavailable · tap to inspect"
                 }
                 SourceCard(
+                    mark = "J",
                     title = "Jellyfin · ${jellyfinConfig.libraryName ?: "Music"}",
                     subtitle = subtitle,
+                    accent = Color(0xFF7557B7),
                     onClick = onOpenJellyfin,
                 )
             }
@@ -1402,6 +1466,7 @@ private fun MusicSourcesScreen(
             val downloadedTracks = managedDownloads.sumOf { it.summary.downloaded }
             val downloadedBytes = managedDownloads.sumOf { it.bytes }
             SourceCard(
+                mark = "↓",
                 title = "Downloads",
                 subtitle = if (managedDownloads.isEmpty()) {
                     "No Jellyfin music saved offline"
@@ -1409,39 +1474,82 @@ private fun MusicSourcesScreen(
                     "${managedDownloads.size} ${pluralize(managedDownloads.size, "album")} · " +
                         "$downloadedTracks tracks · ${formatBytes(downloadedBytes)}"
                 },
+                accent = TouchOrange,
                 onClick = onOpenDownloads,
             )
         }
         if (queue.items.isNotEmpty()) {
             item {
                 SourceCard(
+                    mark = "≡",
                     title = "Queue",
                     subtitle = queue.positionLabel(),
+                    accent = TouchInk,
                     onClick = onOpenQueue,
                 )
             }
         }
         item {
-            TextButton(onClick = onManageSources) {
-                Text("Manage sources and device connections")
+            TextButton(
+                onClick = onManageSources,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Device & source settings  →")
             }
+            Spacer(Modifier.height(12.dp))
         }
     }
 }
 
 @Composable
-private fun SourceCard(title: String, subtitle: String, onClick: () -> Unit) {
+private fun SourceCard(
+    mark: String,
+    title: String,
+    subtitle: String,
+    accent: Color,
+    onClick: () -> Unit,
+) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .shadow(2.dp, RoundedCornerShape(22.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
     ) {
-        Column(modifier = Modifier.padding(24.dp)) {
-            Text(title, style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.height(6.dp))
-            Text(subtitle, style = MaterialTheme.typography.bodyMedium)
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 17.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(48.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = accent,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        mark,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    subtitle,
+                    color = TouchMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            Text(
+                "›",
+                color = accent,
+                style = MaterialTheme.typography.headlineMedium,
+            )
         }
     }
 }
@@ -2082,12 +2190,12 @@ private fun LibraryTitle(title: String, subtitle: String) {
 @Composable
 internal fun BackHeader(title: String, parent: String, onBack: () -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        TextButton(onClick = onBack, modifier = Modifier.padding(horizontal = 12.dp)) {
-            Text("‹ $parent")
+        TextButton(onClick = onBack) {
+            Text("←  $parent")
         }
         Text(
             title,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             style = MaterialTheme.typography.headlineLarge,
         )
     }
@@ -2125,7 +2233,7 @@ internal fun AlbumArtwork(uri: Uri, modifier: Modifier = Modifier) {
     }
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(18.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {
@@ -2148,31 +2256,70 @@ private fun NowPlayingBar(
     onTogglePlayback: () -> Unit,
     onOpenNowPlaying: () -> Unit,
 ) {
-    Surface(tonalElevation = 6.dp) {
+    Surface(
+        modifier = Modifier
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .shadow(8.dp, RoundedCornerShape(22.dp)),
+        shape = RoundedCornerShape(22.dp),
+        color = TouchInk,
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onOpenNowPlaying)
-                .padding(14.dp),
+                .padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            nowPlaying.artworkUri?.let {
-                AlbumArtwork(it, Modifier.size(54.dp))
-                Spacer(Modifier.width(12.dp))
-            }
+            ArtworkFrame(nowPlaying.artworkUri, Modifier.size(58.dp))
+            Spacer(Modifier.width(13.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(nowPlaying.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    nowPlaying.title,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 Text(
                     nowPlaying.artist,
+                    color = Color.White.copy(alpha = 0.68f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            Button(onClick = onTogglePlayback) {
-                Text(if (nowPlaying.isPlaying) "Pause" else "Play")
+            Surface(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clickable(onClick = onTogglePlayback),
+                shape = CircleShape,
+                color = TouchOrange,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        if (nowPlaying.isPlaying) "Ⅱ" else "▶",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun ArtworkFrame(uri: Uri?, modifier: Modifier = Modifier) {
+    if (uri != null) {
+        AlbumArtwork(uri, modifier)
+    } else {
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xFFDDE4E5)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("♪", color = TouchBlue, style = MaterialTheme.typography.headlineLarge)
         }
     }
 }
@@ -2280,6 +2427,9 @@ private fun TouchNowPlayingScreen(
     nowPlaying: NowPlaying?,
     onBack: () -> Unit,
     onTogglePlayback: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Long) -> Unit,
     sonosSessionActive: Boolean,
     onAdjustVolume: (Int) -> Unit,
     onOpenQueue: () -> Unit,
@@ -2288,64 +2438,160 @@ private fun TouchNowPlayingScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        BackHeader("Now Playing", "Music Sources", onBack)
-        Spacer(Modifier.height(20.dp))
-        nowPlaying?.artworkUri?.let { artwork ->
-            AlbumArtwork(
-                artwork,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onBack) { Text("←  Back") }
+            Text(
+                if (sonosSessionActive) "PLAYING ON SONOS" else "NOW PLAYING",
+                color = if (sonosSessionActive) TouchOrange else TouchBlue,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .shadow(14.dp, RoundedCornerShape(28.dp)),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            ArtworkFrame(
+                nowPlaying?.artworkUri,
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 32.dp)
                     .aspectRatio(1f),
             )
-            Spacer(Modifier.height(24.dp))
         }
-        Text(nowPlaying?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium)
-        Text(nowPlaying?.artist.orEmpty(), style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(26.dp))
+        Text(
+            nowPlaying?.title ?: "Nothing playing",
+            style = MaterialTheme.typography.headlineMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            nowPlaying?.artist.orEmpty(),
+            color = TouchMuted,
+            style = MaterialTheme.typography.titleMedium,
+        )
         nowPlaying?.takeIf { it.queueSize > 0 }?.let {
             Text(
-                "${it.queueIndex + 1} of ${it.queueSize}",
-                style = MaterialTheme.typography.bodyMedium,
+                "TRACK ${it.queueIndex + 1} OF ${it.queueSize}",
+                color = TouchMuted,
+                style = MaterialTheme.typography.bodySmall,
             )
         }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(18.dp))
         if (nowPlaying != null) {
-            LinearProgressIndicator(
-                progress = {
-                    if (nowPlaying.durationMs > 0L) {
-                        (nowPlaying.positionMs.toFloat() / nowPlaying.durationMs)
-                            .coerceIn(0f, 1f)
-                    } else {
-                        0f
-                    }
+            var pendingSeekMs by remember(nowPlaying.title, nowPlaying.durationMs) {
+                mutableStateOf<Float?>(null)
+            }
+            val displayedPosition = pendingSeekMs?.toLong() ?: nowPlaying.positionMs
+            Slider(
+                value = displayedPosition.toFloat(),
+                onValueChange = { pendingSeekMs = it },
+                onValueChangeFinished = {
+                    pendingSeekMs?.let { onSeek(it.toLong()) }
+                    pendingSeekMs = null
                 },
+                valueRange = 0f..nowPlaying.durationMs.coerceAtLeast(1L).toFloat(),
+                enabled = nowPlaying.durationMs > 0L,
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text(formatTrackDuration(nowPlaying.positionMs))
-                Text(formatTrackDuration(nowPlaying.durationMs))
+                Text(
+                    formatTrackDuration(displayedPosition),
+                    color = TouchMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "−${formatTrackDuration((nowPlaying.durationMs - displayedPosition).coerceAtLeast(0L))}",
+                    color = TouchMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
-            Spacer(Modifier.height(20.dp))
-            Button(onClick = onTogglePlayback) {
-                Text(if (nowPlaying.isPlaying) "Pause" else "Play")
+            Spacer(Modifier.height(18.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PlayerControlButton("|◀", "Previous", onPrevious)
+                PlayerControlButton(
+                    if (nowPlaying.isPlaying) "Ⅱ" else "▶",
+                    if (nowPlaying.isPlaying) "Pause" else "Play",
+                    onTogglePlayback,
+                    primary = true,
+                )
+                PlayerControlButton("▶|", "Next", onNext)
             }
             if (sonosSessionActive) {
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onAdjustVolume(-1) }) { Text("Volume −") }
-                    Button(onClick = { onAdjustVolume(1) }) { Text("Volume +") }
+                Spacer(Modifier.height(16.dp))
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = { onAdjustVolume(-1) }) { Text("−") }
+                        Text("SONOS VOLUME", style = MaterialTheme.typography.labelLarge)
+                        TextButton(onClick = { onAdjustVolume(1) }) { Text("+") }
+                    }
                 }
             }
-            TextButton(onClick = onOpenQueue) { Text("View Queue") }
-            if (nowPlaying.source == PlaybackSource.JELLYFIN) {
-                TextButton(onClick = onOpenContinueOn) { Text("Continue on…") }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onOpenQueue) { Text("Queue") }
+                if (nowPlaying.source == PlaybackSource.JELLYFIN) {
+                    TextButton(onClick = onOpenContinueOn) { Text("Continue on…") }
+                }
             }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun PlayerControlButton(
+    symbol: String,
+    label: String,
+    onClick: () -> Unit,
+    primary: Boolean = false,
+) {
+    val size = if (primary) 76.dp else 58.dp
+    Surface(
+        modifier = Modifier
+            .size(size)
+            .semantics { contentDescription = label }
+            .shadow(if (primary) 7.dp else 1.dp, CircleShape)
+            .clickable(onClick = onClick),
+        shape = CircleShape,
+        color = if (primary) TouchOrange else MaterialTheme.colorScheme.surface,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                symbol,
+                color = if (primary) Color.White else TouchInk,
+                style = if (primary) {
+                    MaterialTheme.typography.headlineSmall
+                } else {
+                    MaterialTheme.typography.titleMedium
+                },
+            )
         }
     }
 }
