@@ -58,11 +58,66 @@ Run `just` or `mise exec -- just` to list all recipes.
 | `check` | Run build, lint, and unit tests together. |
 | `devices` | List connected Android devices. |
 | `install` | Install a debug APK while preserving app data. |
+| `emulator-setup` | Install the optional API 36 emulator image and create the project Pixel 6 AVD. |
+| `emulator-start` | Start the project emulator in a visible window. |
+| `emulator-start-headless` | Start the project emulator without a window for automated work. |
+| `emulator-install` | Build and install only on the project emulator. |
+| `emulator-smoke` | Install, launch, check for crashes, and capture UI artifacts. |
+| `emulator-check` | Start headlessly and run build, lint, tests, and the emulator smoke check. |
+| `emulator-stop` | Stop only the project emulator. |
 | `tasks` | List every available Gradle task. |
 | `clean` | Remove generated build output. |
 
 Every recipe loads `scripts/android-env.sh`. It preserves mise's environment while retaining the
 old Homebrew paths as a fallback for direct Gradle or ADB use.
+
+## Emulator-first development
+
+Routine development can use a repository-managed Pixel 6 AVD on Apple Silicon or x86-64 hosts.
+The AVD runs the Google APIs Android 36 image and has a fixed name and emulator serial so automated
+commands cannot accidentally install onto or stop a connected physical phone.
+
+Provision it once. The emulator system image is a separate, relatively large SDK download:
+
+```sh
+mise exec -- just emulator-setup
+```
+
+For interactive UI work, start the emulator with a visible window. For agent-driven or other
+unattended checks, start it headlessly:
+
+```sh
+mise exec -- just emulator-start
+# or
+mise exec -- just emulator-start-headless
+```
+
+The normal verification loop can be run with one command. It starts the headless AVD if necessary
+and leaves it running for subsequent iterations:
+
+```sh
+mise exec -- just emulator-check
+```
+
+`emulator-smoke` builds and installs the debug APK, grants the emulator's local-audio permission,
+cold-launches `MainActivity`, suppresses the emulator's one-time immersive-mode tutorial, verifies
+that the app process and activity remain alive, and fails if Android's crash buffer contains an app
+crash. It writes a screenshot and UI hierarchy under `app/build/reports/emulator-smoke/`. These
+generated artifacts are intentionally ignored by Git.
+
+The AVD's app data persists between starts, which makes it useful for queue, download, and
+process-recreation tests. Stop it when finished with:
+
+```sh
+mise exec -- just emulator-stop
+```
+
+The emulator is the default target for Compose UI, navigation, permissions, controlled MediaStore
+fixtures, Jellyfin integration against a reachable test server, and playback-state development.
+It is not a substitute for the Pixel 6 acceptance pass. GrapheneOS behavior, default-Home use,
+Bluetooth/headset controls, real audio focus, lock-screen and screen-off playback, Tailscale state,
+reboots, and device storage/battery behavior still require the physical phone. Physical-device
+commands remain separate under `just devices` and `just install`.
 
 The initial proof of concept is both a normal launchable activity and an Android Home candidate. This lets us test the shell without removing the existing launcher.
 

@@ -43,6 +43,22 @@ or ADB commands remain supported after manually sourcing `scripts/android-env.sh
 shell. The README's Development setup section is the canonical command reference and explains
 first-time setup, shell activation, and every available recipe.
 
+Routine development is emulator-first. `just emulator-setup` installs an optional Google APIs
+Android 36 image and creates the repository's Pixel 6 AVD. `just emulator-start` launches it with a
+window; `just emulator-start-headless` supports agent-driven checks. `just emulator-smoke` safely
+targets only that named AVD at its fixed emulator serial, installs and launches the debug build,
+checks for an app crash, and saves a screenshot plus UI hierarchy under the ignored
+`app/build/reports/emulator-smoke/` directory. The script refuses to operate when the fixed serial
+does not identify the project AVD, preventing an attached Pixel from becoming an accidental target.
+`just emulator-check` starts the headless AVD when needed and runs build, lint, JVM tests, and the
+smoke pass as one repeatable command. AVD app data persists across starts for state-restoration work.
+
+Use the emulator for routine UI, navigation, permissions, controlled MediaStore fixtures, reachable
+Jellyfin integration, and process-recreation work. It does not reproduce GrapheneOS or physical
+hardware behavior. Default-Home behavior, Bluetooth/headset controls, audio focus, lock-screen and
+screen-off playback, Tailscale transitions, reboot restoration, and real device storage/battery
+behavior remain physical-Pixel acceptance requirements.
+
 The app is registered as both a normal launcher activity and an Android Home candidate. It is
 currently being used as the Pixel's default Home app. The README contains CLI commands for
 selecting Reclaimed Player or restoring the GrapheneOS launcher.
@@ -275,6 +291,15 @@ before testing. Fix any restoration gaps found, rerun `assembleDebug` and `lintD
 begin the On-The-Go queue milestone.
 
 ## Device-testing checklist
+
+Before the physical-device pass, run the repeatable local baseline:
+
+- `just emulator-check` for compilation, lint, JVM tests, and install/launch/crash verification.
+- Review its generated screenshot when UI changed.
+
+The current project has no JVM or instrumented test sources yet, so the Gradle test task reports
+`NO-SOURCE`. Add focused tests as state and source coordination are extracted from Android UI and
+service code; do not treat the smoke launch as behavioral coverage.
 
 For each meaningful playback change, test on the physical Pixel:
 

@@ -1,6 +1,7 @@
 set shell := ["sh", "-eu", "-c"]
 
 android_env := "scripts/android-env.sh"
+android_emulator := "scripts/android-emulator.sh"
 gradle := "./gradlew"
 
 # Show the available development commands.
@@ -72,3 +73,37 @@ devices:
 # Install the debug APK on the connected device, preserving app data.
 install:
     . {{ android_env }} && {{ gradle }} installDebug
+
+# Install the optional emulator package/image and create the project Pixel 6 AVD.
+emulator-setup:
+    {{ android_emulator }} setup
+
+# Start the project emulator in a visible window and wait for Android to boot.
+emulator-start:
+    {{ android_emulator }} start
+
+# Start the project emulator without a window, suitable for agents and CI-like checks.
+emulator-start-headless:
+    {{ android_emulator }} start-headless
+
+# Wait until the project emulator has completed booting.
+emulator-wait:
+    {{ android_emulator }} wait
+
+# Build and install the debug APK only on the project emulator.
+emulator-install:
+    {{ android_emulator }} install
+
+# Build, install, launch, and capture smoke-test artifacts from the project emulator.
+emulator-smoke:
+    {{ android_emulator }} smoke
+
+# Start the headless AVD if needed, then run the complete local and emulator verification pass.
+emulator-check:
+    {{ android_emulator }} start-headless
+    . {{ android_env }} && {{ gradle }} assembleDebug lintDebug testDebugUnitTest
+    {{ android_emulator }} smoke
+
+# Stop only the project emulator; never targets a physical Android device.
+emulator-stop:
+    {{ android_emulator }} stop
