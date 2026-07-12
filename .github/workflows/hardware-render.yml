@@ -1,0 +1,21 @@
+name: Hardware render check
+
+on:
+  pull_request:
+    paths:
+      - "hardware/**"
+      - ".github/workflows/hardware-render.yml"
+  push:
+    branches: [main]
+    paths:
+      - "hardware/**"
+      - ".github/workflows/hardware-render.yml"
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regenerate and compare hardware outputs
+        run: hardware/pixel6-ipod-case/render.sh --check

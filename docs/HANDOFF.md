@@ -119,6 +119,21 @@ Both interfaces operate on the same navigation and playback state.
 Mode preference survives process death. Classic mode hides system bars with transient edge-swipe
 access; Touch mode restores them.
 
+### Pixel 6 enclosure prototype
+
+- `hardware/pixel6-ipod-case/` contains a parametric OpenSCAD model and ready-to-slice STL exports
+  for a two-part iPod-style enclosure.
+- The lower cradle leaves the camera bar, USB-C/speaker area, top microphone, and right-side buttons
+  accessible. A removable snap-on faceplate exposes only the Classic display and Click Wheel areas.
+- Both STL solids pass OpenSCAD's manifold check and are oriented for support-free FDM printing.
+- `hardware/pixel6-ipod-case/render.sh` regenerates both STLs and the assembly preview headlessly
+  with the pinned official OpenSCAD Docker image. GitHub Actions verifies that checked-in renders
+  stay synchronized with the parametric source; automation must never invoke the macOS app binary.
+- The model uses Google's nominal 158.6 x 74.8 x 8.9 mm Pixel 6 envelope. The second revision uses
+  physical-fit feedback: a squarer 4.5 mm internal corner radius, a camera-bar relief based on a
+  10.25 mm top offset and 22 mm bar height, and a 48 mm wheel opening placed 15 mm below the display
+  window. Revised fit, touch, thermal, and drop testing remain outstanding.
+
 ## Important source files
 
 - `MainActivity.kt`: application state, shared navigation, Touch UI, controller connection, and

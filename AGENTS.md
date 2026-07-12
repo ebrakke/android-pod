@@ -86,3 +86,8 @@ leave a completed commit only on the local machine unless the user explicitly as
 
 Keep README screenshots intentional and current. Store curated images under `docs/images/`; do not
 commit incidental ADB captures or UI hierarchy dumps.
+
+For OpenSCAD work, use `hardware/pixel6-ipod-case/render.sh`. Never invoke the host
+`openscad` binary or `/Applications/OpenSCAD.app` from automation; the macOS Qt build crashes in
+the agent execution environment and shows the user a crash dialog. The renderer intentionally uses
+the pinned official Docker image and is also checked in GitHub Actions.
